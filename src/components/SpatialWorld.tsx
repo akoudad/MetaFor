@@ -3,20 +3,21 @@
 import { useId, useLayoutEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { PerspectiveCamera, Vector3 } from "three";
-import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, connectionEndpoints, detailForScale } from "@/lib/spatial";
-import { createBranchScene, sampleBranchScene } from "@/lib/scene";
-import type { BranchScene } from "@/lib/scene";
+import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, connectionBounds, connectionEndpoints, detailForScale } from "@/lib/spatial";
+import type { ProjectedCard } from "@/lib/spatial";
+import { createBatchScene, createBranchScene, sampleBatchScene, sampleBranchScene } from "@/lib/scene";
+import type { BatchScene, BranchScene } from "@/lib/scene";
 
 export type WorldPoint = { x: number; y: number; z: number };
 export type SpatialNode = { id: string; position: WorldPoint };
 export type SpatialLink = {
   from: string;
   to: string;
-  type?: "origin" | "related";
+  type?: "origin" | "related" | "synthesis";
   status?: "suggested" | "accepted";
   reason?: string;
 };
-export type SpatialTransition = { key: string; fromId: string; toId: string; follow: boolean };
+export type SpatialTransition = { key: string; fromId: string; toId: string; toIds?: string[]; follow: boolean };
 
 type SpatialWorldProps = {
   nodes: SpatialNode[];
@@ -30,7 +31,7 @@ type SpatialWorldProps = {
   children: (node: SpatialNode) => ReactNode;
 };
 
-type Projection = { x: number; y: number; scale: number; opacity: number; visible: boolean };
+type Projection = ProjectedCard & { opacity: number; visible: boolean };
 
 const DEFAULT_VIEW: WorldPoint = { x: 0, y: 0, z: 900 };
 const FADE_START_SCALE = 1.7;
@@ -161,7 +162,10 @@ export default function SpatialWorld(props: SpatialWorldProps) {
     let knownNodeIds = new Set(latest.current.nodes.map((node) => node.id));
     let handledTransition = latest.current.transition?.key;
     let blockedView: WorldPoint | null = null;
-    let branch: { trigger: SpatialTransition; scene: BranchScene; elapsed: number; target: WorldPoint; viewInput: WorldPoint } | null = null;
+    let branch: {
+      trigger: SpatialTransition; nodeIds: string[]; scene: BranchScene | null; batch: BatchScene | null;
+      elapsed: number; target: WorldPoint; viewInput: WorldPoint;
+    } | null = null;
     let shootingSeed = 24083;
     const randomShooting = () => {
       shootingSeed = (shootingSeed * 48271) % 2147483647;
@@ -299,7 +303,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
 
       if (branch && (
         reducedMotion || transition?.key !== branch.trigger.key || transition.follow !== branch.trigger.follow ||
-        view !== branch.viewInput || !nodes.some((node) => node.id === branch!.trigger.toId) ||
+        view !== branch.viewInput || branch.nodeIds.some((id) => !nodes.some((node) => node.id === id)) ||
         requested.x !== branch.target.x || requested.y !== branch.target.y || requested.z !== branch.target.z
       )) {
         // Clearing a transition with no replacement camera target means stop,
@@ -310,13 +314,21 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       if (blockedView !== view || reducedMotion) blockedView = null;
       if (transition && transition.key !== handledTransition) {
         handledTransition = transition.key;
-        const source = nodes.find((node) => node.id === transition.fromId);
-        const destination = nodes.find((node) => node.id === transition.toId);
-        if (!reducedMotion && source && destination && !knownNodeIds.has(destination.id)) {
+        const nodeById = new Map(nodes.map((node) => [node.id, node]));
+        const origins = new Map(links.filter((link) => !link.type || link.type === "origin").map((link) => [link.to, link.from]));
+        const topics = [...new Set(transition.toIds ?? [transition.toId])].flatMap((id) => {
+          const destination = nodeById.get(id);
+          const sourceId = transition.toIds ? origins.get(id) ?? transition.fromId : transition.fromId;
+          const source = nodeById.get(sourceId);
+          return source && destination && !knownNodeIds.has(id)
+            ? [{ id, source: source.position, destination: destination.position }] : [];
+        });
+        if (!reducedMotion && topics.length) {
+          const startView = { x: currentView.x, y: currentView.y, z: currentView.z };
           branch = {
-            trigger: { ...transition }, elapsed: 0, target: requested, viewInput: view,
-            scene: createBranchScene(source.position, destination.position,
-              { x: currentView.x, y: currentView.y, z: currentView.z }, requested, width, height),
+            trigger: { ...transition }, nodeIds: topics.map((topic) => topic.id), elapsed: 0, target: requested, viewInput: view,
+            scene: transition.toIds ? null : createBranchScene(topics[0].source, topics[0].destination, startView, requested, width, height),
+            batch: transition.toIds ? createBatchScene(topics, startView, requested) : null,
           };
           blockedView = null;
         }
@@ -324,14 +336,26 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       knownNodeIds = new Set(nodes.map((node) => node.id));
       const target = blockedView ? currentView : requested;
       targetView.set(target.x, target.y, target.z);
-      let reveal: ReturnType<typeof sampleBranchScene> | null = null;
+      const reveals = new Map<string, Omit<ReturnType<typeof sampleBranchScene>, "view">>();
+      let revealView: WorldPoint | null = null;
+      let arrivalDone = false;
       if (branch) {
         branch.elapsed += delta * 1000;
-        reveal = sampleBranchScene(branch.scene, branch.elapsed);
+        if (branch.batch) {
+          const sample = sampleBatchScene(branch.batch, branch.elapsed);
+          for (const node of sample.nodes) reveals.set(node.id, node);
+          revealView = sample.view;
+          arrivalDone = sample.done;
+        } else if (branch.scene) {
+          const sample = sampleBranchScene(branch.scene, branch.elapsed);
+          reveals.set(branch.nodeIds[0], sample);
+          revealView = sample.view;
+          arrivalDone = sample.done;
+        }
       }
 
-      if (branch?.trigger.follow && reveal) {
-        currentView.set(reveal.view.x, reveal.view.y, reveal.view.z);
+      if (branch?.trigger.follow && revealView) {
+        currentView.set(revealView.x, revealView.y, revealView.z);
       } else if (reducedMotion || currentView.distanceToSquared(targetView) < 0.01) {
         currentView.copy(targetView);
       } else {
@@ -350,8 +374,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         const element = nodeElements.current.get(node.id);
         if (!element) continue;
 
-        const entering = Boolean(branch && reveal && node.id === branch.trigger.toId);
-        const { x, y, z } = entering ? reveal!.position : node.position;
+        const reveal = reveals.get(node.id);
+        const { x, y, z } = reveal?.position ?? node.position;
         const distance = currentView.z - z;
         const visible =
           (!visibleNodeIds || visibleNodeIds.has(node.id)) &&
@@ -371,8 +395,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         projected.set(x, y, z).project(camera);
         const screenX = (projected.x + 1) * width / 2;
         const screenY = (1 - projected.y) * height / 2;
-        const scale = focalLength / distance * (entering ? reveal!.scale : 1);
-        const opacity = Math.min(1, (MAX_PROJECTED_SCALE - scale) / (MAX_PROJECTED_SCALE - FADE_START_SCALE)) * (entering ? reveal!.opacity : 1);
+        const scale = focalLength / distance * (reveal?.scale ?? 1);
+        const opacity = Math.min(1, (MAX_PROJECTED_SCALE - scale) / (MAX_PROJECTED_SCALE - FADE_START_SCALE)) * (reveal?.opacity ?? 1);
         const halfWidth = CARD_WIDTH * scale / 2;
         const halfHeight = CARD_HEIGHT * scale / 2;
         const onScreen =
@@ -383,7 +407,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         // Preserve mounted content and scroll positions while the camera passes
         // a card's plane, without creating an enormous compositor layer.
         element.style.opacity = String(opacity);
-        const interactive = onScreen && (!entering || reveal!.done);
+        const interactive = onScreen && (!reveal || reveal.done);
         element.inert = !interactive;
         if (interactive) element.removeAttribute("aria-hidden");
         else element.setAttribute("aria-hidden", "true");
@@ -396,14 +420,16 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         element.style.zIndex = String(node.id === activeId ? camera.far + 1 : Math.max(1, Math.round(camera.far - distance)));
         element.style.setProperty("--node-scale", String(Math.max(0.1, scale)));
         const mobileFullThreshold = Math.max(0.1, (width - 32) / CARD_WIDTH * 0.9);
-        element.dataset.detail = scale >= mobileFullThreshold ? "full" : detailForScale(scale);
+        const detail = scale >= mobileFullThreshold ? "full" : detailForScale(scale);
+        element.dataset.detail = detail;
         // Keep projectable endpoints so links can cross the clipped viewport
         // even when an endpoint's card is completely offscreen.
-        positions.set(node.id, { x: screenX, y: screenY, scale, opacity, visible: true });
+        positions.set(node.id, { ...connectionBounds({ x: screenX, y: screenY, scale }, detail), opacity, visible: true });
       }
 
       const ancestry = new Set<string>();
-      const parents = new Map(links.filter((link) => link.type !== "related").map((link) => [link.to, link.from]));
+      const parents = new Map(links.filter((link) => !link.type || link.type === "origin").map((link) => [link.to, link.from]));
+      const synthesized = new Set(links.filter((link) => link.type === "synthesis").map((link) => link.to));
       let ancestor = activeId;
       while (ancestor && !ancestry.has(ancestor)) {
         ancestry.add(ancestor);
@@ -414,6 +440,11 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         const link = links[index];
         const line = linkElements.current.get(linkKey(link, index));
         if (!line) continue;
+        if ((!link.type || link.type === "origin") && synthesized.has(link.to)) {
+          // Keep navigation ancestry, but show the actual synthesis inputs.
+          line.style.visibility = "hidden";
+          continue;
+        }
 
         const from = positions.get(link.from);
         const to = positions.get(link.to);
@@ -424,7 +455,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
 
         const related = link.type === "related";
         const direct = Boolean(activeId && (link.from === activeId || link.to === activeId));
-        const onPath = ancestry.has(link.from) && ancestry.has(link.to);
+        const onPath = (!link.type || link.type === "origin") && ancestry.has(link.from) && ancestry.has(link.to);
         const emphasized = direct || (!related && onPath);
         const opacity = related
           ? (direct ? 0.5 : 0.14) * (link.status === "suggested" ? 0.6 : 1)
@@ -432,15 +463,14 @@ export default function SpatialWorld(props: SpatialWorldProps) {
 
         line.setAttribute("x1", String(endpoints.start.x));
         line.setAttribute("y1", String(endpoints.start.y));
-        const edgeProgress = branch && reveal && link.from === branch.trigger.fromId && link.to === branch.trigger.toId && !related
-          ? reveal.edgeProgress : 1;
+        const edgeProgress = !related ? reveals.get(link.to)?.edgeProgress ?? 1 : 1;
         line.setAttribute("x2", String(endpoints.start.x + (endpoints.end.x - endpoints.start.x) * edgeProgress));
         line.setAttribute("y2", String(endpoints.start.y + (endpoints.end.y - endpoints.start.y) * edgeProgress));
         line.setAttribute("opacity", String(opacity * Math.min(from.opacity, to.opacity)));
         line.setAttribute("stroke-width", emphasized ? "1.35" : "1");
       }
 
-      if (reveal?.done) branch = null;
+      if (arrivalDone) branch = null;
       if (branch || currentView.distanceToSquared(targetView) > 0.01) {
         frame = requestAnimationFrame(render);
       }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BRANCH_TRANSITION_MS, createBranchScene, sampleBranchScene } from "../src/lib/scene";
+import { BATCH_TRANSITION_MS, BRANCH_TRANSITION_MS, createBatchScene, createBranchScene, sampleBatchScene, sampleBranchScene } from "../src/lib/scene";
 import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, focusView } from "../src/lib/spatial";
 
 test("a new branch emerges from its source and finishes at its real position and view", () => {
@@ -59,4 +59,52 @@ test("emergence stays between its endpoints and never mutates saved layout posit
     previousProgress = sample.edgeProgress;
   }
   assert.deepEqual({ source, destination, scene }, original);
+});
+
+test("a batch fans out from individual origins and settles on the whole group", () => {
+  const topics = [
+    { id: "paris", source: { x: 0, y: 0, z: 0 }, destination: { x: -380, y: -840, z: -420 } },
+    { id: "berlin", source: { x: 0, y: 0, z: 0 }, destination: { x: 380, y: -840, z: -420 } },
+    { id: "rome", source: { x: 760, y: -840, z: -420 }, destination: { x: 380, y: -1680, z: -840 } },
+    { id: "madrid", source: { x: 760, y: -840, z: -420 }, destination: { x: 1140, y: -1680, z: -840 } },
+  ];
+  const startView = { x: 0, y: 0, z: 650 };
+  const endView = { x: 380, y: -840, z: 3000 };
+  const scene = createBatchScene(topics, startView, endView);
+  const original = structuredClone({ topics, startView, endView, scene });
+  const first = sampleBatchScene(scene, 0);
+  assert.deepEqual(first.view, startView);
+  for (const node of first.nodes) {
+    assert.deepEqual(node.position, topics.find((topic) => topic.id === node.id)!.source);
+    assert.equal(node.opacity, 0);
+    assert.equal(node.edgeProgress, 0);
+  }
+  let previousEdge = 0;
+  for (let elapsed = 0; elapsed < BATCH_TRANSITION_MS; elapsed += 16) {
+    const sample = sampleBatchScene(scene, elapsed);
+    for (const axis of ["x", "y", "z"] as const) {
+      assert.ok(sample.view[axis] >= Math.min(startView[axis], endView[axis]));
+      assert.ok(sample.view[axis] <= Math.max(startView[axis], endView[axis]), "batch camera must not dive beyond the group view");
+    }
+    for (const node of sample.nodes) {
+      const topic = topics.find((value) => value.id === node.id)!;
+      for (const axis of ["x", "y", "z"] as const) {
+        assert.ok(node.position[axis] >= Math.min(topic.source[axis], topic.destination[axis]));
+        assert.ok(node.position[axis] <= Math.max(topic.source[axis], topic.destination[axis]));
+      }
+    }
+    assert.ok(sample.nodes[0].edgeProgress >= previousEdge);
+    previousEdge = sample.nodes[0].edgeProgress;
+  }
+  const final = sampleBatchScene(scene, BATCH_TRANSITION_MS);
+  assert.deepEqual(final.view, endView);
+  assert.equal(final.done, true);
+  for (const node of final.nodes) {
+    assert.deepEqual(node.position, topics.find((topic) => topic.id === node.id)!.destination);
+    assert.equal(node.scale, 1);
+    assert.equal(node.opacity, 1);
+    assert.equal(node.edgeProgress, 1);
+  }
+  assert.deepEqual(sampleBatchScene(scene, BATCH_TRANSITION_MS * 2), final);
+  assert.deepEqual({ topics, startView, endView, scene }, original);
 });

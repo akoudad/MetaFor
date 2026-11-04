@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { fitOverview, focusView } from "../src/lib/spatial";
+import { connectionBounds, connectionEndpoints, fitOverview, focusView } from "../src/lib/spatial";
+import type { DetailLevel } from "../src/lib/spatial";
 import type { SpatialLink, SpatialTransition, WorldPoint } from "../src/components/SpatialWorld";
 
-test("the real scene preserves masked readers, interrupts arrival, honors reduced motion, and cleans up", async () => {
+test("the real scene preserves readers, animates and interrupts arrivals, honors reduced motion, and cleans up", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
   const originals = new Map<string, PropertyDescriptor | undefined>();
   const install = (key: string, value: unknown) => {
@@ -124,6 +125,81 @@ test("the real scene preserves masked readers, interrupts arrival, honors reduce
     assert.equal(childCard.inert, false);
     assert.equal(childCard.hasAttribute("aria-hidden"), false);
     assert.equal(lines[0].style.visibility, "visible");
+
+    const batch = [
+      { id: "paris", position: { x: -380, y: -840, z: -420 } },
+      { id: "berlin", position: { x: 380, y: -840, z: -420 } },
+      { id: "rome", position: { x: 1260, y: -2120, z: -1470 } },
+      { id: "madrid", position: { x: -1260, y: -2120, z: -1470 } },
+    ];
+    const origins = [source, source, child, second];
+    const batchView = fitOverview([...state.nodes, ...batch], 1100, 780);
+    update({
+      nodes: [...state.nodes, ...batch], view: batchView, reducedMotion: false,
+      links: [...state.links, ...batch.map((node, index) => ({ from: origins[index].id, to: node.id, type: "origin" as const })),
+        { from: child.id, to: batch[0].id, type: "synthesis", status: "accepted" }],
+      transition: { key: "batch-1", fromId: source.id, toId: batch[0].id, toIds: batch.map((node) => node.id), follow: true },
+    });
+    tick();
+    const batchCards = batch.map((node) => dom.window.document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)!);
+    for (let index = 0; index < batchCards.length; index++) {
+      const originCard = dom.window.document.querySelector<HTMLElement>(`[data-node-id="${origins[index].id}"]`)!;
+      assert.equal(batchCards[index].style.left, originCard.style.left, "each batch card must emerge from its own navigation parent");
+      assert.equal(batchCards[index].style.top, originCard.style.top);
+      assert.equal(batchCards[index].inert, true);
+    }
+    advance(35);
+    const projection = (element: HTMLElement) => connectionBounds({
+      x: parseFloat(element.style.left), y: parseFloat(element.style.top),
+      scale: Number(element.style.transform.match(/scale\(([^)]+)\)/)![1]),
+    }, element.dataset.detail as DetailLevel);
+    const batchLines = dom.window.document.querySelectorAll<SVGLineElement>("line");
+    assert.equal(batchLines[2].style.visibility, "hidden", "synthesis inputs replace the redundant navigation-origin drawing");
+    for (const [line, originCard, targetCard] of [[batchLines[3], sourceCard, batchCards[1]], [batchLines[6], childCard, batchCards[0]]] as const) {
+      assert.equal(line.style.visibility, "visible");
+      const endpoints = connectionEndpoints(projection(originCard), projection(targetCard))!;
+      const drawn = Math.hypot(Number(line.getAttribute("x2")) - endpoints.start.x, Number(line.getAttribute("y2")) - endpoints.start.y);
+      const complete = Math.hypot(endpoints.end.x - endpoints.start.x, endpoints.end.y - endpoints.start.y);
+      assert.ok(drawn > 0 && drawn < complete * 0.99, "origin and synthesis arrows should grow toward an entering card");
+      assert.ok(line.hasAttribute("marker-end"));
+    }
+    const batchInterrupted = { ...rendered! };
+    update({ transition: null });
+    tick();
+    assert.deepEqual(rendered, batchInterrupted);
+    assert.equal(frames.size, 0, "interrupting a batch must stop the camera too");
+
+    const background = [
+      { id: "background-a", position: { x: -380, y: -2780, z: -1470 } },
+      { id: "background-b", position: { x: 380, y: -2780, z: -1470 } },
+    ];
+    update({
+      nodes: [...state.nodes, ...background], view: batchInterrupted,
+      links: [...state.links, ...background.map((node) => ({ from: source.id, to: node.id, type: "origin" as const }))],
+      transition: { key: "batch-background", fromId: source.id, toId: background[0].id, toIds: background.map((node) => node.id), follow: false },
+    });
+    advance(12);
+    assert.deepEqual(rendered, batchInterrupted, "background batch arrivals must not move the camera");
+    assert.ok(frames.size > 0);
+    update({ reducedMotion: true });
+    tick();
+    assert.equal(frames.size, 0, "reduced motion must finish a batch without further animation");
+
+    const finalBatch = [
+      { id: "final-a", position: { x: -380, y: -3440, z: -1890 } },
+      { id: "final-b", position: { x: 380, y: -3440, z: -1890 } },
+    ];
+    const finalView = fitOverview([...state.nodes, ...finalBatch], 1100, 780);
+    update({
+      nodes: [...state.nodes, ...finalBatch], view: finalView, reducedMotion: false,
+      links: [...state.links, ...finalBatch.map((node) => ({ from: source.id, to: node.id, type: "origin" as const }))],
+      transition: { key: "batch-finish", fromId: source.id, toId: finalBatch[0].id, toIds: finalBatch.map((node) => node.id), follow: true },
+    });
+    advance(80);
+    assert.deepEqual(rendered, finalView, "the completed batch must stay in its group view");
+    assert.equal(frames.size, 0);
+    for (const node of finalBatch) assert.equal(dom.window.document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)!.inert, false);
+    assert.equal(childReader.scrollTop, 173);
 
     update({ reducedMotion: false, transition: null, view: start });
     tick();

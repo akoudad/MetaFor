@@ -19,6 +19,7 @@ type SpaceMapProps = {
 function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview }: SpaceMapProps) {
   const projection = useMemo(() => projectSpaceMap(nodes), [nodes]);
   const byId = useMemo(() => new Map(projection.nodes.map((node) => [node.id, node])), [projection]);
+  const synthesisIds = useMemo(() => new Set(links.filter((link) => link.type === "synthesis").map((link) => link.to)), [links]);
   const destination = mapDestination(view, projection);
   const elements = useRef(new Map<string, SVGGElement>());
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -41,10 +42,12 @@ function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview
   return <aside className="space-map" aria-label="Conversation map">
     <div className="space-map-heading"><span>Map</span><button className="space-map-overview" type="button" onClick={onOverview} aria-label="Show all topics" title="Show all topics">↗</button></div>
     <svg className="space-map-viewport" viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`} width={MAP_WIDTH} height={MAP_HEIGHT} role="group" aria-label="Topics in three dimensions" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null); }}>
+      <defs><marker id="map-synthesis-arrow" viewBox="0 0 6 6" refX="9" refY="3" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0L6 3L0 6Z" fill="#999" /></marker></defs>
       {links.map((link, index) => {
+        if (link.type === "origin" && synthesisIds.has(link.to)) return null;
         const from = byId.get(link.from);
         const to = byId.get(link.to);
-        return from && to && from.id !== to.id ? <line key={`${link.from}:${link.to}:${index}`} className={`space-map-edge ${link.type === "related" ? "is-related" : ""}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeDasharray={link.type === "related" ? "2 3" : undefined} aria-hidden="true" /> : null;
+        return from && to && from.id !== to.id ? <line key={`${link.from}:${link.to}:${index}`} className={`space-map-edge ${link.type === "related" ? "is-related" : ""}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeDasharray={link.type === "related" ? "2 3" : undefined} markerEnd={link.type === "synthesis" ? "url(#map-synthesis-arrow)" : undefined} aria-hidden="true" /> : null;
       })}
       {destination && <g className={`space-map-camera ${destination.outside ? "is-outside" : ""}`} transform={`translate(${destination.x} ${destination.y}) rotate(${destination.angle})`} aria-hidden="true" pointerEvents="none">
         <title>{destination.outside ? "Camera destination is beyond this map; the marker points toward it." : "Camera destination"}</title>

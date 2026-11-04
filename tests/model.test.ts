@@ -87,3 +87,47 @@ test("invalid IDs and detached roots do not produce misleading paths", () => {
   assert.throws(() => getPath(space, "priorities"), /not connected/);
   assert.throws(() => validateConversation(space), /missing its navigation parent/);
 });
+
+test("directed synthesis links coexist with related links without changing navigation ancestry", () => {
+  const space = createSampleConversation();
+  const before = getPath(space, "equity").map((item) => item.id);
+  space.connections = [
+    { id: "synthesis-a", from: "priorities", to: "equity", type: "synthesis", status: "accepted", reason: "Uses career priorities in this comparison." },
+    { id: "synthesis-b", from: "interviews", to: "equity", type: "synthesis", status: "accepted", reason: "Uses interview preparation in this comparison." },
+    { id: "related-a", from: "priorities", to: "equity", type: "related", status: "suggested", reason: "These topics may also be compared." },
+    { id: "related-b", from: "equity", to: "interviews", type: "related", status: "accepted", reason: "An existing accepted relationship." },
+  ];
+  const serialized = JSON.stringify(space);
+  assert.doesNotThrow(() => validateConversation(space));
+  assert.deepEqual(getPath(space, "equity").map((item) => item.id), before);
+  assert.equal(JSON.stringify(space), serialized, "validation preserves link direction and all original content");
+  assert.doesNotThrow(() => validateConversation(JSON.parse(serialized)), "synthesis links survive the existing JSON conversation representation");
+});
+
+test("connection cycles are valid while parent cycles remain invalid", () => {
+  const space = createSampleConversation();
+  space.connections = [
+    { id: "synthesis-forward", from: "priorities", to: "equity", type: "synthesis", status: "accepted", reason: "An earlier synthesis input." },
+    { id: "synthesis-return", from: "equity", to: "priorities", type: "synthesis", status: "accepted", reason: "A later synthesis builds on the resulting topic." },
+  ];
+  assert.doesNotThrow(() => validateConversation(space));
+  assert.equal(getDepth(space, "equity"), 2);
+  space.explorations.compensation.parentId = "equity";
+  assert.throws(() => validateConversation(space), /parent cycle/);
+});
+
+test("synthesis links require accepted status, distinct existing endpoints, and unique IDs", () => {
+  const base = { id: "synthesis", from: "priorities", to: "equity", type: "synthesis", status: "accepted", reason: "Combines both subjects." };
+  const invalid = [
+    { link: { ...base, status: "suggested" }, error: /synthesis connection must be accepted/ },
+    { link: { ...base, from: "missing" }, error: /missing exploration/ },
+    { link: { ...base, to: "missing" }, error: /missing exploration/ },
+    { link: { ...base, to: base.from }, error: /different explorations/ },
+    { link: { ...base, type: "causes" }, error: /Unsupported connection type/ },
+  ];
+  for (const { link, error } of invalid) {
+    const space = { ...createSampleConversation(), connections: [link] };
+    assert.throws(() => validateConversation(space), error);
+  }
+  assert.throws(() => validateConversation({ ...createSampleConversation(), connections: [base, { ...base, to: "interviews" }] }), /Duplicate connection ID/);
+});

@@ -30,6 +30,7 @@ export default function TopicCard(props: TopicCardProps) {
   const answers = item.messages.filter((message) => message.role === "assistant");
   const sections = answers.flatMap((message) => message.sections);
   const childCount = getChildren(space, item.id).length;
+  const sources = (space.connections ?? []).filter((link) => link.type === "synthesis" && link.to === item.id);
 
   const scrollTo = (id: string, button: HTMLButtonElement) => {
     const article = button.closest("article");
@@ -67,6 +68,7 @@ export default function TopicCard(props: TopicCardProps) {
       </div>}
       {item.source && <blockquote className="source-quote" data-no-selection><button onClick={() => props.onSource(item.source!)}>From {space.explorations[item.source.explorationId]?.title} ↗</button>{item.source.quote && <p>{item.source.quote}</p>}</blockquote>}
       {!item.source && item.parentId && <button className="branch-link" onClick={() => props.onOpen(item.parentId!)}>Back to {space.explorations[item.parentId]?.title} <span>↗</span></button>}
+      {sources.length > 0 && <div className="synthesis-sources" data-no-selection><span>Combines</span>{sources.map((link) => <button key={link.id} onClick={() => props.onOpen(link.from)}>{space.explorations[link.from].title} ↗</button>)}</div>}
       {item.messages.map((message) => message.role === "user" ? <div key={message.id}>
         {message.source?.quote && message.source.quote !== item.source?.quote && <blockquote className="source-quote"><button onClick={() => props.onSource(message.source!)}>Selected passage ↗</button><p>{message.source.quote}</p></blockquote>}
         <p className="original-question">{message.sections.map((section) => section.body).join("\n\n")}</p>

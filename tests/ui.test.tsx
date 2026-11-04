@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 import { IDBFactory } from "fake-indexeddb";
 import type { AnswerRequest, AnswerResult } from "../src/lib/contracts";
 import type { Snapshot } from "../src/lib/storage";
+import { focusView, layoutSpace } from "../src/lib/spatial";
 
 // This harness exercises the real components and storage, not browser layout.
 // Reduced motion and fixed dimensions make camera visibility deterministic.
@@ -121,7 +122,7 @@ after(() => {
 });
 
 function fixture(activeId = "observatory"): Snapshot {
-  return {
+  const snapshot: Snapshot = {
     format: "ingx", version: 1, savedAt: "2020-01-01T00:00:00.000Z",
     conversation: {
       id: "ui-observatory", title: "Plan an observatory", rootId: "observatory", kind: "live", connections: [],
@@ -146,6 +147,9 @@ function fixture(activeId = "observatory"): Snapshot {
     },
     view: { activeId, view: { x: 0, y: 0, z: 900 }, overview: false, started: true, places: {}, history: [], positions: {} },
   };
+  const active = layoutSpace(snapshot.conversation).find((node) => node.id === activeId)!;
+  snapshot.view.view = focusView(active.position, 1100, 780);
+  return snapshot;
 }
 
 function result(request: AnswerRequest, decision: "branch" | "continue" = "branch"): AnswerResult {
@@ -216,6 +220,16 @@ async function quietWheel() {
 async function leaveInitialBoundary(direction: 1 | -1) {
   await quietWheel();
   wheelSpace(direction * 120);
+}
+
+async function currentSnapshot(id?: string) {
+  let saved: Snapshot | null = null;
+  await ui.act(async () => {
+    ui.fireEvent.pageHide(window);
+    saved = await storage.loadSnapshot(id);
+  });
+  assert.ok(saved, "the current conversation must be saved");
+  return saved as Snapshot;
 }
 
 test("selecting text offers an action without attaching context, calling the model, or taking focus", async () => {
@@ -653,6 +667,157 @@ test("a fresh chat is empty and its first answer is placed automatically", async
   assert.equal(requests[0].mode, "auto");
   assert.equal(ui.screen.queryByRole("button", { name: "Open as branch" }), null);
   assert.equal(ui.screen.queryByRole("button", { name: "Keep in parent" }), null);
+});
+
+test("a city batch creates four explicit choices and later histories retain their correct city ancestors", async () => {
+  const cities = ["Marrakesh", "Fes", "Rabat", "Tangier"];
+  answer = (request) => {
+    const response = { ...result(request, "continue"), title: "Morocco trip", summary: "Explore four cities and their places.", sections: [{ title: "Four cities", body: cities.join(", ") }] };
+    if (requests.length === 1) return Response.json(response);
+    const history = requests.length === 3;
+    const names = history ? cities.slice(0, 3) : cities;
+    return Response.json({
+      ...response,
+      sections: [{ title: history ? "City histories" : "Places by city", body: history ? "The three histories are organized beneath their cities." : "Each city has its own collection of seven places." }],
+      context: { fullIds: Object.keys(request.conversation.explorations), summaryIds: [], truncated: false },
+      topics: names.map((city) => ({
+        targetId: history ? Object.values(request.conversation.explorations).find((item) => item.title === city)!.id : request.activeId,
+        decision: "branch", title: history ? `${city} history` : city,
+        summary: history ? `A history of ${city}.` : `Seven places in ${city}.`,
+        sections: history ? [{ title: "History", body: `A focused historical account of ${city}.` }] : Array.from({ length: 7 }, (_, index) => ({ title: `Place ${index + 1}`, body: `${city} place ${index + 1} details.` })),
+      })),
+    });
+  };
+  const user = await open();
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Suggest four Moroccan cities{Enter}");
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Morocco trip"));
+  const first = await currentSnapshot();
+  assert.equal(Object.keys(first.conversation.explorations).length, 1, "a brief shortlist stays in one answer");
+  const originalAnswer = structuredClone(first.conversation.explorations.root.messages[1]);
+  await user.type(composer, "Give me seven places in each city{Enter}");
+  const cityChooser = await ui.screen.findByRole("complementary", { name: "Choose a topic" });
+  assert.equal(cityChooser.querySelectorAll(".topic-choice-list button").length, 4);
+  for (const city of cities) assert.ok(ui.within(cityChooser).getByRole("button", { name: `Explore ${city}` }));
+  assert.equal(activeTopic(), "Go to Morocco trip", "a batch must not choose its first destination for the user");
+  const organized = await currentSnapshot();
+  assert.equal(Object.keys(organized.conversation.explorations).length, 5);
+  assert.deepEqual(organized.conversation.explorations.root.messages[1], originalAnswer);
+  assert.equal(organized.conversation.explorations.root.messages.at(-1)!.sections.length, 1);
+  const cityIds = Object.fromEntries(cities.map((city) => [city, Object.values(organized.conversation.explorations).find((item) => item.title === city)!.id]));
+  for (const city of cities) {
+    const topic = organized.conversation.explorations[cityIds[city]];
+    assert.equal(topic.parentId, "root");
+    assert.equal(topic.messages.at(-1)!.sections.length, 7);
+  }
+  await user.click(ui.within(cityChooser).getByRole("button", { name: "Explore Marrakesh" }));
+  await user.type(composer, "Keep this city draft");
+  const cityReader = readerFor(cityIds.Marrakesh);
+  cityReader.scrollTop = 315; ui.fireEvent.scroll(cityReader);
+  await user.click(ui.screen.getByRole("button", { name: "Go to Morocco trip" }));
+  await user.type(composer, "Explain the histories of the first three cities{Enter}");
+  const historyChooser = await ui.screen.findByRole("complementary", { name: "Choose a topic" });
+  assert.equal(historyChooser.querySelectorAll(".topic-choice-list button").length, 3, "choices are the returned topics, not all children of the request origin");
+  for (const city of cities.slice(0, 3)) {
+    const option = ui.within(historyChooser).getByRole("button", { name: `Explore ${city} history` });
+    assert.ok(ui.within(option).getByText(`From ${city}`));
+  }
+  const histories = await currentSnapshot();
+  assert.equal(Object.keys(histories.conversation.explorations).length, 8);
+  for (const city of cities.slice(0, 3)) {
+    const topic = Object.values(histories.conversation.explorations).find((item) => item.title === `${city} history`)!;
+    assert.equal(topic.parentId, cityIds[city]);
+    await ui.waitFor(() => assert.equal(document.querySelector<HTMLElement>(`[data-node-id="${cityIds[city]}"]`)!.style.visibility, "visible", "a history's city ancestor remains visible in the batch overview"));
+  }
+  await ui.waitFor(() => assert.equal(document.querySelector<HTMLElement>(`[data-node-id="${cityIds.Tangier}"]`)!.style.visibility, "hidden", "unaffected topics are not substituted for the explicit result choices"));
+  await user.click(ui.within(historyChooser).getByRole("button", { name: "Explore Marrakesh history" }));
+  await user.click(await ui.screen.findByRole("button", { name: "Back to Marrakesh ↗" }));
+  assert.equal(activeTopic(), "Go to Marrakesh");
+  assert.equal(composer.value, "Keep this city draft");
+  assert.equal(cityReader.scrollTop, 315);
+  assert.equal(requests.length, 3);
+});
+
+test("a late batch stays in the background and opens only its affected topics without losing the next draft", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explore roof design and site access separately{Enter}");
+  await ui.waitFor(() => assert.equal(requests.length, 1));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await user.type(composer, "My next weather question");
+  const request = requests[0];
+  await ui.act(async () => { resolveAnswer(Response.json({
+    ...result(request, "continue"), sections: [{ title: "Two topics", body: "Roof design and site access are ready to explore." }],
+    topics: ["Roof design", "Site access"].map((title) => ({ targetId: request.activeId, decision: "branch", title, summary: `Explore ${title.toLowerCase()}.`, sections: [{ title, body: `${title} details.` }] })),
+  })); });
+  await ui.screen.findByText("Your answer is ready in 2 topics.", { exact: false });
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(composer.value, "My next weather question");
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
+  const chooser = ui.screen.getByRole("complementary", { name: "Choose a topic" });
+  assert.equal(chooser.querySelectorAll(".topic-choice-list button").length, 2);
+  assert.ok(ui.within(chooser).getByRole("button", { name: "Explore Roof design" }));
+  assert.ok(ui.within(chooser).getByRole("button", { name: "Explore Site access" }));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  assert.equal(composer.value, "My next weather question");
+  assert.equal(requests.length, 1);
+});
+
+test("an unopened batch cannot redirect a later failed question away from its retry card", async () => {
+  const responses: ((value: Response) => void)[] = [];
+  answer = () => new Promise<Response>((resolve) => { responses.push(resolve); });
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explore roof design and site access separately{Enter}");
+  await ui.waitFor(() => assert.equal(requests.length, 1));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  const first = requests[0];
+  await ui.act(async () => { responses[0](Response.json({
+    ...result(first, "continue"), sections: [{ title: "Two topics", body: "Roof design and site access are ready to explore." }],
+    topics: ["Roof design", "Site access"].map((title) => ({ targetId: first.activeId, decision: "branch", title, summary: `Explore ${title.toLowerCase()}.`, sections: [{ title, body: `${title} details.` }] })),
+  })); });
+  await ui.screen.findByText("Your answer is ready in 2 topics.", { exact: false });
+  await user.type(composer, "Explain the rainfall records{Enter}");
+  await ui.waitFor(() => assert.equal(requests.length, 2));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  await user.type(composer, "Keep my equipment draft");
+  await ui.act(async () => { responses[1](Response.json({ error: "The model is temporarily unavailable." }, { status: 503 })); });
+  await ui.screen.findByText("The question in another topic needs a retry.", { exact: false });
+  await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null, "the old batch must not replace the failed question's reading view");
+  assert.ok(await ui.screen.findByRole("button", { name: "Retry" }));
+  assert.ok(ui.screen.getByText("Explain the rainfall records"));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  assert.equal(composer.value, "Keep my equipment draft");
+  const saved = await currentSnapshot("ui-observatory");
+  assert.equal(Object.keys(saved.conversation.explorations).length, 5, "the earlier batch remains saved even after its notice is cleared");
+  assert.equal(saved.view.pending?.requestId, requests[1].requestId);
+  assert.equal(requests.length, 2);
+});
+
+test("a malformed batch leaves every original topic intact and retains a retryable question", async () => {
+  const initial = fixture();
+  const original = structuredClone(initial.conversation);
+  answer = (request) => Response.json({
+    ...result(request, "continue"), sections: [{ title: "Overview", body: "Two proposed topics." }],
+    topics: [
+      { targetId: request.activeId, decision: "branch", title: "Valid first topic", summary: "A valid entry before the invalid entry.", sections: [{ title: "Details", body: "This must not partially appear." }] },
+      { targetId: "missing-city", decision: "branch", title: "Invalid target", summary: "This target does not exist.", sections: [{ title: "Details", body: "Reject the complete batch." }] },
+    ],
+  });
+  const user = await open(initial);
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Organize two subjects{Enter}");
+  await ui.screen.findByRole("button", { name: "Retry" });
+  assert.equal(ui.screen.queryByRole("button", { name: "Go to Valid first topic" }), null);
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  const saved = await currentSnapshot("ui-observatory");
+  assert.deepEqual(saved.conversation, original, "invalid batches cannot update the overview or create a subset of the proposed nodes");
+  assert.equal(saved.view.pending?.question, "Organize two subjects");
+  assert.equal(requests.length, 1);
 });
 
 test("an exact passage from an older arbitrary answer becomes the new branch source", async () => {

@@ -1,6 +1,7 @@
 import type { AnswerRequest, AnswerResult } from "./contracts";
 import type { Connection, Conversation, Exploration, Message } from "./model";
 import { validateConversation, validateSourceReference } from "./model";
+import { validateSynthesisSources, validateTopicAnswers } from "./ai";
 
 export function createConversation(): Conversation {
   return {
@@ -27,7 +28,7 @@ export function applyAnswer(
   space: Conversation,
   request: AnswerRequest,
   answer: AnswerResult,
-): { conversation: Conversation; destinationId: string } {
+): { conversation: Conversation; destinationId: string; destinationIds: string[]; topicIds: string[] } {
   validateConversation(space);
   if (space.id !== request.conversation.id) {
     throw new Error("This answer belongs to a different conversation.");
@@ -41,7 +42,8 @@ export function applyAnswer(
 
   for (const exploration of Object.values(space.explorations)) {
     if (exploration.messages.some((message) => message.role === "assistant" && message.requestId === request.requestId)) {
-      return { conversation: space, destinationId: exploration.id };
+      const topicIds = Array.from({ length: 8 }, (_, index) => Object.values(space.explorations).find((topic) => topic.messages.some((message) => message.role === "assistant" && message.id === `topic-answer-${request.requestId}-${index}`))?.id).filter((id): id is string => Boolean(id));
+      return { conversation: space, destinationId: exploration.id, destinationIds: [exploration.id, ...topicIds], topicIds };
     }
   }
 
@@ -61,63 +63,66 @@ export function applyAnswer(
   if (answer.sections.some((section) => !section || typeof section.title !== "string" || typeof section.body !== "string")) {
     throw new Error("Each answer section must contain a title and text.");
   }
-  if (!answer.context || typeof answer.model !== "string" || !answer.model.trim()) {
+  if (!answer.context || !Array.isArray(answer.context.fullIds) || !Array.isArray(answer.context.summaryIds) || typeof answer.model !== "string" || !answer.model.trim()) {
     throw new Error("The answer is missing its model or context record.");
   }
   if (!Array.isArray(answer.related) || answer.related.length > 20) {
     throw new Error("The answer has an invalid list of related topics.");
   }
 
+  const allowed = new Set([...answer.context.fullIds, ...answer.context.summaryIds]);
+  const topics = validateTopicAnswers(answer.topics, originId, allowed);
+  if (topics.length && request.mode !== "auto") throw new Error("Separate topic answers require automatic placement.");
+  if (topics.some((topic) => !Object.hasOwn(space.explorations, topic.targetId))) throw new Error("An additional answer target no longer exists.");
+  if (topics.length && (answer.sections.length > 2 || JSON.stringify(answer.sections).length > 4000 || JSON.stringify([answer.sections, ...topics.map((topic) => topic.sections)]).length > 40000)) throw new Error("The multi-topic answer is too large or its overview is not brief.");
+
   const initialRoot = origin.id === space.rootId && !origin.messages.some((message) => message.role === "assistant");
-  const decision = initialRoot ? "continue" : answer.decision;
-  // A topic-level split has a navigation parent, but no selected passage.
-  // Never invent a section source from the previous answer's final paragraph.
+  const decision = initialRoot || topics.length ? "continue" : answer.decision;
+  const sourceIds = validateSynthesisSources(answer.sourceIds, decision, allowed);
+  if (sourceIds.some((id) => !Object.hasOwn(space.explorations, id)) || topics.some((topic) => topic.sourceIds?.some((id) => !Object.hasOwn(space.explorations, id)))) throw new Error("A synthesis source no longer exists.");
   const source = request.selection ? structuredClone(request.selection) : null;
-  if (decision === "branch" && !origin.messages.some((message) => message.role === "assistant")) {
-    throw new Error("Ask the first question before starting another topic.");
-  }
-  const destinationId = decision === "branch" ? `exploration-${request.requestId}` : originId;
-  if (decision === "branch" && space.explorations[destinationId]) {
-    throw new Error("The new exploration ID is already in use.");
-  }
-  const question: Message = {
-    id: `question-${request.requestId}`,
-    role: "user",
-    requestId: request.requestId,
-    source,
-    sections: [{ id: `prompt-${request.requestId}`, title: "", body: request.question }],
-  };
-  const response: Message = {
-    id: `answer-${request.requestId}`,
-    role: "assistant",
-    requestId: request.requestId,
-    source,
-    routing: { decision, reason: initialRoot && answer.decision === "branch" ? "The first answer starts the main conversation." : answer.reason },
-    model: answer.model,
-    context: structuredClone(answer.context),
-    sections: answer.sections.map((section, index) => ({
-      id: `section-${request.requestId}-${index}`,
-      title: section.title,
-      body: section.body,
-    })),
-  };
-  const destination: Exploration = decision === "branch"
-    ? {
-      id: destinationId,
-      title: answer.title,
-      summary: answer.summary,
-      parentId: originId,
-      source,
-      messages: [question, response],
-      position: [origin.position[0], origin.position[1] - 800, origin.position[2] - 300],
-    }
-    : {
-      ...origin,
-      title: initialRoot ? answer.title : origin.title,
-      summary: answer.summary,
-      messages: [...origin.messages, question, response],
-    };
+  const explorations = { ...space.explorations };
   const connections: Connection[] = [...(space.connections ?? [])];
+  const outputs = [
+    { targetId: originId, decision, title: answer.title, summary: answer.summary, sections: answer.sections, sourceIds },
+    ...topics,
+  ];
+  const destinationIds: string[] = [];
+  for (const [outputIndex, output] of outputs.entries()) {
+    const primary = outputIndex === 0;
+    const part = outputIndex - 1;
+    const target = explorations[output.targetId];
+    if (output.decision === "branch" && !target.messages.some((message) => message.role === "assistant")) throw new Error("Ask the first question before starting another topic.");
+    const destinationId = output.decision === "continue" ? target.id : primary ? `exploration-${request.requestId}` : `topic-${request.requestId}-${part}`;
+    if (output.decision === "branch" && Object.hasOwn(explorations, destinationId)) throw new Error("The new exploration ID is already in use.");
+    const question: Message = {
+      id: primary ? `question-${request.requestId}` : `topic-question-${request.requestId}-${part}`,
+      role: "user", ...(primary ? { requestId: request.requestId } : {}), source,
+      sections: [{ id: primary ? `prompt-${request.requestId}` : `topic-prompt-${request.requestId}-${part}`, title: "", body: request.question }],
+    };
+    const response: Message = {
+      id: primary ? `answer-${request.requestId}` : `topic-answer-${request.requestId}-${part}`,
+      role: "assistant", ...(primary ? { requestId: request.requestId } : {}), source,
+      routing: { decision: output.decision, reason: primary ? topics.length ? "The overview stays here; each subject has its own topic." : initialRoot && answer.decision === "branch" ? "The first answer starts the main conversation." : answer.reason : output.decision === "continue" ? "Continuing this subject in its existing topic." : "Exploring this subject in its own topic." },
+      model: answer.model, context: structuredClone(answer.context),
+      sections: output.sections.map((section, index) => ({ id: primary ? `section-${request.requestId}-${index}` : `topic-section-${request.requestId}-${part}-${index}`, title: section.title, body: section.body })),
+    };
+    explorations[destinationId] = output.decision === "branch" ? {
+      id: destinationId, title: output.title, summary: output.summary, parentId: target.id,
+      // The request may refer to a passage in another topic. Retain it on the
+      // messages without claiming that it is this navigation parent's passage.
+      source: source?.explorationId === target.id ? source : null,
+      messages: [question, response], position: [target.position[0], target.position[1] - 800, target.position[2] - 300],
+    } : {
+      ...target, title: primary && initialRoot ? output.title : target.title, summary: output.summary,
+      messages: [...target.messages, question, response],
+    };
+    if ((output.sourceIds?.length ?? 0) >= 2) {
+      for (const [index, from] of output.sourceIds!.entries()) connections.push({ id: `synthesis-${request.requestId}-${outputIndex}-${index}`, from, to: destinationId, type: "synthesis", reason: `Combined in ${output.title}.`, status: "accepted" });
+    }
+    destinationIds.push(destinationId);
+  }
+  const destinationId = destinationIds[0];
   for (const [index, related] of answer.related.entries()) {
     if (!related || typeof related.targetId !== "string" || !space.explorations[related.targetId]) {
       throw new Error("The answer references a related topic that does not exist.");
@@ -136,9 +141,9 @@ export function applyAnswer(
   const conversation: Conversation = {
     ...space,
     title: initialRoot ? answer.title : space.title,
-    explorations: { ...space.explorations, [destinationId]: destination },
+    explorations,
     connections,
   };
   validateConversation(conversation);
-  return { conversation, destinationId };
+  return { conversation, destinationId, destinationIds, topicIds: destinationIds.slice(1) };
 }

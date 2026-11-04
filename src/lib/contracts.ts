@@ -18,6 +18,15 @@ export type ContextRecord = {
   truncated: boolean;
 };
 
+export type TopicAnswer = {
+  targetId: string;
+  decision: "branch" | "continue";
+  title: string;
+  summary: string;
+  sections: { title: string; body: string }[];
+  sourceIds?: string[];
+};
+
 export type AnswerResult = {
   requestId: string;
   decision: "branch" | "continue";
@@ -25,7 +34,9 @@ export type AnswerResult = {
   title: string;
   summary: string;
   sections: { title: string; body: string }[];
+  sourceIds?: string[];
   related: { targetId: string; reason: string }[];
+  topics?: TopicAnswer[];
   context: ContextRecord;
   model: string;
 };

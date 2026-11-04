@@ -15,24 +15,32 @@ connections, independently of where topics appear on screen.
 2. Select a passage and click **Ask about this** beside the highlight. The quote
    attaches above the question input, which receives focus without losing your
    draft. Highlighting alone does not attach it or submit anything. You can also
-   use a section's ask action. The model keeps a clarification
-   in the current topic or opens a connected topic for a separate exploration.
+   use a section's ask action. A writer model produces the answer; a second
+   organizer call decides how its sections fit the conversation. Brief replies
+   and shortlists can stay together. Substantial independent subjects can split
+   into separate topics, while an existing topic can receive further detail.
    Placement is automatic; there are no branch/continue controls to manage.
 3. Follow the new topic while its source remains intact. A selected passage keeps
    its exact source. An unselected topic change retains its parent connection
    without claiming it came from an arbitrary section.
    The camera briefly reveals the source and new topic together before entering
-   the answer. Navigating or typing interrupts the movement.
-4. Pull back from full answers to summaries and titles. Topics stay in the same
-   space. Focus a topic, drag it by its handle, or jump through the navigation
-   rail or mini-map. **Reset layout** restores the automatic arrangement. Longer topics have
-   an **In this topic** section outline.
-5. Return through the path or `Esc`. Drafts, selected passages, reading positions,
+   the answer. Several new topics fan out together and stop at a fitted choice,
+   without selecting the first one for you. Reused topics stay in place.
+   Navigating or typing interrupts the movement.
+4. Ask to compare or combine ideas. The organizer can create one or more new
+   synthesis topics with arrows from their contributing inputs. Originals remain
+   available; the automatic layout places the new topic below its inputs. Grouping depends on the
+   model's interpretation; no domain-specific split rules are built in.
+5. Pull back from full answers to summaries and titles. Topics stay in the same
+   space in a compact, stable arrangement. Focus a topic, drag it by its handle,
+   or jump through the navigation rail or mini-map. **Reset layout** restores the
+   automatic arrangement. Longer topics have an **In this topic** section outline.
+6. Return through the path or `Esc`. Drafts, selected passages, reading positions,
    and camera views are remembered. A pending answer remains attached to the
    question's original topic, even when you navigate elsewhere.
    Stopped, failed, or interrupted questions can be retried or dismissed. Reload
    never sends a question automatically, and recovery keeps the next draft intact.
-6. Use **New chat** for a different conversation and **Saved chats** to return.
+7. Use **New chat** for a different conversation and **Saved chats** to return.
    Existing content and unfinished drafts are retained. Export/import `.ingx`
    files to carry conversations between browsers. Older saved samples remain
    available in the library but are not restored automatically at startup.
@@ -51,7 +59,9 @@ path silently. Scrolling down from the overview resumes the active topic.
 A gesture that reads text cannot also change levels. A fresh gesture is required
 at an edge, and momentum cannot cross several levels. Returning preserves the
 topic's draft and reading position, including a passage halfway through an answer.
-This follows navigation parents, independently of other related-topic links.
+This follows navigation parents, independently of related and synthesis links.
+A choice shown after an answer may also list several affected topics from
+different parts of the conversation.
 
 Drag empty space to pan; click a topic to focus. Pinch, Ctrl-wheel, and `+` / `−`
 still control visual zoom; `0` shows the overview. The left rail and mini-map
@@ -76,6 +86,15 @@ Keeping a visual connection does not automatically include all its text.
 
 ## Current limits
 
+Each completed answer normally uses two paid model calls. The organizer assigns
+validated sections; it does not guarantee the grouping you would have chosen.
+Existing saved answers keep their structure rather than being converted
+retroactively. A response can add up to eight separate topic outputs.
+
+Context is bounded to 60,000 characters, with excerpts from up to eight direct
+children of the active topic in addition to prioritized context. Some material
+is summarized or shortened; source links do not imply every word was included.
+
 Answers arrive whole after a pending state; there is no text streaming. The model
 has no browsing or retrieval tools. Voice, collaboration, accounts, and GPTea
 integration are outside this build.
@@ -87,11 +106,18 @@ encrypted backups.
 
 ## Release checks
 
-The revised localhost backend completed three live requests using automatic
-placement throughout: an initial answer, a deeper topic from a selected passage,
-then a short clarification in that topic. React DOM integration
-tests cover selection, placement, navigation, and recovery. Actual browser
-visuals and gestures remain unverified because
-the automation bridge was unavailable. No public deployment has been verified.
+The latest localhost check passed four app requests / eight model calls. It kept
+a shortlist inline, created four city topics, continued three relevant existing
+city topics independently, then created a seven-day itinerary with four incoming
+synthesis edges. Replay and `.ingx` round trips passed. These examples test general
+behavior; they are not hardcoded rules about cities or histories.
+
+Automated tests cover section partitioning, atomic multi-topic application,
+synthesis references, selection, navigation, and recovery. Native Safari checks
+on the local production build verified the imported graph's four-city layout,
+synthesis and source links, exact reading-position restoration, the section ask
+action and composer focus, the topic chooser, and the compact final overview.
+Physical trackpad/touch gestures, device performance, live arrival motion, and
+public deployment remain unverified.
 
 See the [acceptance checklist](hackathon.md) and [demo](demo.md).

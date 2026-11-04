@@ -7,7 +7,7 @@ import NavigationRail from "./NavigationRail";
 import SpaceMap from "./SpaceMap";
 import TopicCard from "./TopicCard";
 import { getDepth, getPath } from "@/lib/model";
-import type { SourceReference } from "@/lib/model";
+import type { Conversation, SourceReference } from "@/lib/model";
 import { createConversation, applyAnswer } from "@/lib/session";
 import { loadSnapshot, saveSnapshot, backupSnapshot, listSnapshots, serializeSnapshot, parseSnapshot } from "@/lib/storage";
 import type { Snapshot } from "@/lib/storage";
@@ -21,7 +21,7 @@ import type { ScrollGesture } from "@/lib/semantic-scroll";
 type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number };
 type Pointer = { x: number; y: number };
 type Pending = { request: AnswerRequest; error?: string; navigation: number };
-type TopicTransition = { key: string; fromId: string; toId: string; follow: boolean };
+type TopicTransition = { key: string; fromId: string; toId: string; toIds?: string[]; follow: boolean };
 type SelectionPreview = { source: SourceReference; x: number; y: number };
 const INITIAL_VIEW = { x: 0, y: 0, z: 900 };
 
@@ -50,8 +50,9 @@ export default function ConversationSpace() {
   const nodes = useMemo(() => applyPositionOverrides(baseNodes, positions), [baseNodes, positions]);
   const [overview, setOverview] = useState(false);
   const [choiceParentId, setChoiceParentState] = useState<string | null>(null);
+  const [choiceTopicIds, setChoiceTopicIds] = useState<string[] | null>(null);
   const choiceNow = useRef<string | null>(null);
-  const setChoiceParent = useCallback((id: string | null) => { choiceNow.current = id; setChoiceParentState(id); }, []);
+  const setChoiceParent = useCallback((id: string | null, topicIds: string[] | null = null) => { choiceNow.current = id; setChoiceParentState(id); setChoiceTopicIds(topicIds); }, []);
   const [scrollHint, setScrollHint] = useState("");
   const scrollGesture = useRef<ScrollGesture | null>(null);
   const [draft, setDraftState] = useState("");
@@ -87,6 +88,7 @@ export default function ConversationSpace() {
   const setTransition = useCallback((value: TopicTransition | null) => { transitionNow.current = value; setTransitionState(value); }, []);
   const [unreadId, setUnreadId] = useState<string | null>(null);
   const [unreadMessageId, setUnreadMessageId] = useState<string | null>(null);
+  const unreadTopics = useRef<string[]>([]);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [statusError, setStatusError] = useState("");
   const [accessCode, setAccessCode] = useState("");
@@ -124,9 +126,10 @@ export default function ConversationSpace() {
   const path = getPath(space, active.id);
   const links = useMemo(() => [
     ...Object.values(space.explorations).filter((item) => item.parentId).map((item) => ({ from: item.parentId!, to: item.id, type: "origin" as const })),
-    ...(space.connections ?? []).filter((link) => link.status === "accepted" || connections).filter((link) => connections || link.from === activeId || link.to === activeId).map((link) => ({ from: link.from, to: link.to, type: "related" as const, status: link.status, reason: link.reason })),
+    ...(space.connections ?? []).filter((link) => link.status === "accepted" || connections).filter((link) => link.type === "synthesis" || connections || link.from === activeId || link.to === activeId).map((link) => ({ from: link.from, to: link.to, type: link.type, status: link.status, reason: link.reason })),
   ], [space, activeId, connections]);
-  const choiceIds = useMemo(() => choiceParentId ? [choiceParentId, ...Object.values(space.explorations).filter((item) => item.parentId === choiceParentId).map((item) => item.id)] : undefined, [choiceParentId, space]);
+  const choices = useMemo(() => choiceParentId ? choiceTopicIds ? choiceTopicIds.map((id) => space.explorations[id]).filter(Boolean) : Object.values(space.explorations).filter((item) => item.parentId === choiceParentId) : [], [choiceParentId, choiceTopicIds, space]);
+  const choiceIds = useMemo(() => choiceParentId ? [...new Set([choiceParentId, ...choices.flatMap((item) => getPath(space, item.id).map((ancestor) => ancestor.id)), ...(space.connections ?? []).filter((link) => link.type === "synthesis" && choices.some((item) => item.id === link.to)).map((link) => link.from)])] : undefined, [choiceParentId, choices, space]);
   const pointFor = useCallback((id: string) => nodes.find((node) => node.id === id)?.position ?? { x: 0, y: 0, z: 0 }, [nodes]);
   const size = () => ({ width: stage.current?.clientWidth ?? 1000, height: stage.current?.clientHeight ?? 700 });
   const setCamera = (next: SpatialPoint) => { viewNow.current = next; setView(next); };
@@ -161,7 +164,7 @@ export default function ConversationSpace() {
     abort.current?.abort();
     markInteraction();
     setChoiceParent(null); scrollGesture.current = null;
-    setPending(null); setUnreadId(null); setUnreadMessageId(null);
+    setPending(null); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = [];
     saved.current = next.view.places;
     history.current = next.view.history;
     let camera = next.view.view;
@@ -559,6 +562,7 @@ export default function ConversationSpace() {
     abort.current?.abort();
     const controller = new AbortController(); abort.current = controller;
     setPending({ ...task, error: undefined }); setNotice("");
+    unreadTopics.current = []; setUnreadId(null); setUnreadMessageId(null);
     try {
       const response = await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json", ...(accessCode ? { "x-demo-code": accessCode } : {}) }, body: JSON.stringify(task.request), signal: controller.signal });
       const payload = await response.json().catch(() => null);
@@ -574,13 +578,19 @@ export default function ConversationSpace() {
       spaceNow.current = applied.conversation; setSpace(applied.conversation);
       setPending(null);
       const follow = activeNow.current === task.request.activeId && navigation.current === task.navigation;
-      if (!before.explorations[applied.destinationId]) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: applied.destinationId, follow });
+      const topicIds = applied.topicIds ?? [];
+      const newTopicIds = topicIds.filter((id) => !before.explorations[id]);
+      if (!topicIds.length && !before.explorations[applied.destinationId]) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: applied.destinationId, follow });
       if (follow) {
         if (applied.destinationId !== task.request.activeId) pushHistory(task.request.activeId);
         activeNow.current = applied.destinationId; setActiveId(applied.destinationId);
         setDraft(saved.current[applied.destinationId]?.draft ?? ""); setSelection(null); setIncludeIds([]); setOverview(false);
         const destination = layoutSpace(applied.conversation, positions).find((node) => node.id === applied.destinationId)!;
-        setCamera(focusView(destination.position, size().width, size().height));
+        if (topicIds.length) {
+          showAnswerTopics(applied.conversation, applied.destinationId, topicIds);
+          if (newTopicIds.length) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: newTopicIds[0], toIds: newTopicIds, follow: true });
+        }
+        else setCamera(focusView(destination.position, size().width, size().height));
         requestAnimationFrame(() => {
           const reader = readers.current.get(applied.destinationId);
           const answer = reader?.querySelector<HTMLElement>(`[data-message-id="answer-${CSS.escape(task.request.requestId)}"]`);
@@ -589,13 +599,25 @@ export default function ConversationSpace() {
             reader.scrollTop += (answer.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 16;
           }
         });
-      } else { setUnreadId(applied.destinationId); setUnreadMessageId(`answer-${task.request.requestId}`); setNotice("Your answer is ready."); }
+      } else {
+        if (newTopicIds.length) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: newTopicIds[0], toIds: newTopicIds, follow: false });
+        unreadTopics.current = topicIds; setUnreadId(applied.destinationId); setUnreadMessageId(`answer-${task.request.requestId}`); setNotice(topicIds.length ? `Your answer is ready in ${topicIds.length} topics.` : "Your answer is ready.");
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : "The request failed. Your question is preserved.";
+      unreadTopics.current = [];
       setPending({ ...task, error: message });
       if (activeNow.current !== task.request.activeId) { setNotice("The question in another topic needs a retry."); setUnreadId(task.request.activeId); setUnreadMessageId(null); }
     }
+  };
+
+  const showAnswerTopics = (conversation: Conversation, originId: string, topicIds: string[]) => {
+    setTransition(null); setChoiceParent(originId, topicIds); setOverview(false);
+    const ids = new Set([originId, ...topicIds.flatMap((id) => getPath(conversation, id).map((item) => item.id)), ...(conversation.connections ?? []).filter((link) => link.type === "synthesis" && topicIds.includes(link.to)).map((link) => link.from)]);
+    const laidOut = layoutSpace(conversation, positions);
+    setCamera(fitOverview(laidOut.filter((node) => ids.has(node.id)), size().width, size().height));
+    hover.current = null; wheelAnchor.current = null;
   };
 
   const submit = (event: FormEvent) => {
@@ -663,7 +685,9 @@ export default function ConversationSpace() {
     if (!unreadId) return;
     const id = unreadId;
     const messageId = unreadMessageId;
+    const topicIds = unreadTopics.current;
     focus(id);
+    if (topicIds.length) { showAnswerTopics(spaceNow.current, id, topicIds); unreadTopics.current = []; return; }
     requestAnimationFrame(() => {
       const reader = readers.current.get(id);
       if (!reader) return;
@@ -754,7 +778,7 @@ export default function ConversationSpace() {
     </aside>}
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
     <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
-      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds}>
+      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds}>
         {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onExplore={() => { scrollGesture.current = consumeScrollGesture(`${space.id}:topic:${node.id}`, 1, performance.now()); exploreChildren(node.id); }} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
@@ -770,8 +794,8 @@ export default function ConversationSpace() {
     {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { chooseSection(selectionPreview.source); window.getSelection()?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
     {choiceParentId && <aside ref={choicePanel} className="topic-choice" aria-label="Choose a topic">
       <div className="topic-choice-heading"><h2>Choose a topic</h2><button className="topic-choice-return" onClick={() => resumeTopic(choiceParentId)}>Return to {space.explorations[choiceParentId].title}</button></div>
-      <p>Explore {space.explorations[choiceParentId].title}</p>
-      <div className="topic-choice-list">{Object.values(space.explorations).filter((item) => item.parentId === choiceParentId).map((item) => <button key={item.id} onClick={() => resumeTopic(item.id)}>Explore {item.title}</button>)}</div>
+      <p>{choiceTopicIds ? "Your answer, organized by topic" : `Explore ${space.explorations[choiceParentId].title}`}</p>
+      <div className="topic-choice-list">{choices.map((item) => <button key={item.id} onClick={() => resumeTopic(item.id)} aria-label={`Explore ${item.title}`}><strong>{item.title}</strong>{choiceTopicIds && item.parentId !== choiceParentId && item.parentId && <small>From {space.explorations[item.parentId].title}</small>}<span>{item.summary}</span></button>)}</div>
     </aside>}
     {scrollHint && <p className="scroll-boundary-hint" role="status">{scrollHint}</p>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}

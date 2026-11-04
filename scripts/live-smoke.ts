@@ -11,7 +11,7 @@ import { focusView, layoutSpace } from "../src/lib/spatial";
 import { parseSnapshot, serializeSnapshot } from "../src/lib/storage";
 
 // Uses the running app's configured provider. Never loads or prints credentials.
-// Makes at most three paid model requests and writes artifacts outside the repo.
+// Makes at most three app requests (six paid model calls) and writes artifacts outside the repo.
 async function main() {
   const origin = new URL(process.argv[2] ?? "http://127.0.0.1:3000").origin;
   const statusResponse = await fetch(`${origin}/api/status`, { signal: AbortSignal.timeout(15000) });

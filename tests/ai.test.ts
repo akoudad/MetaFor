@@ -20,6 +20,15 @@ function completion(value: unknown = answer(), finishReason = "stop") {
   return Response.json({ choices: [{ finish_reason: finishReason, message: { content: JSON.stringify(value) } }] });
 }
 
+function successfulCompletion(init?: RequestInit) {
+  const payload = JSON.parse(String(init?.body));
+  if (payload.response_format.json_schema.name === "metaphore_organization") {
+    const written = answer();
+    return completion({ reason: written.reason, overview: "", primary: { decision: written.decision, title: written.title, summary: written.summary, sectionIds: ["s0"], sourceIds: [] }, topics: [] });
+  }
+  return completion();
+}
+
 function httpRequest(value: unknown = input(), headers: Record<string, string> = {}) {
   return new Request("http://localhost:3000/api/answer", { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json", ...headers }, body: JSON.stringify(value) });
 }
@@ -68,12 +77,12 @@ test("rendered Markdown selection can span adjacent sections of one immutable an
   assert.equal(context.payload.selection?.text, request.selection.quote);
 });
 
-test("context includes the active path but unrelated bodies require explicit inclusion", () => {
+test("context includes the active path and direct children while unrelated bodies require inclusion", () => {
   const request = input();
   request.activeId = "equity";
   request.conversation.explorations.priorities.messages[1].sections[0].body = "UNRELATED_PRIVATE_DETAIL";
   let context = buildAnswerContext(request);
-  assert.deepEqual(context.record.fullIds, ["equity", "compensation", "job-search"]);
+  assert.deepEqual(context.record.fullIds, ["equity", "compensation", "job-search", "vesting"]);
   assert.ok(!JSON.stringify(context.payload).includes("UNRELATED_PRIVATE_DETAIL"));
   assert.ok(context.record.summaryIds.includes("priorities"));
   request.includeIds = ["priorities"];
@@ -170,18 +179,21 @@ test("first response cannot be routed into a branch without an original answer",
 });
 
 test("provider sends the documented structured request and returns only validated answer fields", async () => {
+  const schemas: string[] = [];
   const fetchMock: typeof fetch = async (url, init) => {
     assert.equal(url, "https://api.meta.ai/v1/chat/completions");
     const body = JSON.parse(String(init?.body));
     assert.equal(body.model, "muse-spark-1.3");
+    schemas.push(body.response_format.json_schema.name);
     assert.equal(body.response_format.type, "json_schema");
     assert.equal(body.response_format.json_schema.strict, true);
     assert.equal(body.stream, false);
     assert.equal(body.store, false);
     assert.ok(body.max_completion_tokens > 0);
-    return completion();
+    return successfulCompletion(init);
   };
   const result = await generateAnswer(input(), { env: testEnv, fetch: fetchMock });
+  assert.deepEqual(schemas, ["metaphore_answer", "metaphore_organization"]);
   assert.equal(result.requestId, "request-one");
   assert.equal(result.sections[0].title, "Start with cash");
   assert.equal(result.model, "muse-spark-1.3");
@@ -207,26 +219,26 @@ test("timeouts and user cancellation abort the upstream request", async () => {
 
 test("HTTP boundary enforces origin, demo code, body size and secret-free status", async () => {
   let calls = 0;
-  const handler = createAnswerHandler({ env: { ...testEnv, DEMO_ACCESS_CODE: "test-access" }, fetch: async () => { calls += 1; return completion(); } });
+  const handler = createAnswerHandler({ env: { ...testEnv, DEMO_ACCESS_CODE: "test-access" }, fetch: async (_url, init) => { calls += 1; return successfulCompletion(init); } });
   assert.equal((await handler(httpRequest(input(), { origin: "https://unrelated.example" }))).status, 403);
   assert.equal((await handler(httpRequest())).status, 401);
   assert.equal((await handler(httpRequest(input(), { "x-demo-code": "test-access", "content-length": String(MAX_REQUEST_BYTES + 1) }))).status, 413);
   assert.equal(calls, 0);
   const response = await handler(httpRequest(input(), { "x-demo-code": "test-access" }));
   assert.equal(response.status, 200);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
   assert.deepEqual(getProviderStatus({ ...testEnv, DEMO_ACCESS_CODE: "test-access" }), { configured: true, model: "muse-spark-1.3", accessCodeRequired: true });
 });
 
 test("origin checks use the actual Host when Next normalizes a local request URL", async () => {
-  const handler = createAnswerHandler({ env: testEnv, fetch: async () => completion() });
+  const handler = createAnswerHandler({ env: testEnv, fetch: async (_url, init) => successfulCompletion(init) });
   assert.equal((await handler(httpRequest(input(), { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000" }))).status, 200);
   assert.equal((await handler(httpRequest(input(), { host: "127.0.0.1:3000", origin: "https://unrelated.example" }))).status, 403);
 });
 
 test("HTTPS proxy scheme is supported while cross-origin and forwarded-host spoofing stay rejected", async () => {
   let calls = 0;
-  const handler = createAnswerHandler({ env: testEnv, fetch: async () => { calls += 1; return completion(); } });
+  const handler = createAnswerHandler({ env: testEnv, fetch: async (_url, init) => { calls += 1; return successfulCompletion(init); } });
   const proxyHeaders = { host: "demo.example", origin: "https://demo.example", "x-forwarded-proto": "https" };
   assert.equal((await handler(httpRequest(input(), proxyHeaders))).status, 200);
   assert.equal((await handler(httpRequest(input(), { ...proxyHeaders, origin: "https://other.example", "x-forwarded-host": "other.example" }))).status, 403);
@@ -235,7 +247,7 @@ test("HTTPS proxy scheme is supported while cross-origin and forwarded-host spoo
   assert.equal((await handler(new Request("https://demo.example/api/answer", {
     method: "POST", headers: { ...proxyHeaders, origin: "http://demo.example", "x-forwarded-proto": "http", "content-type": "application/json" }, body: JSON.stringify(input()),
   }))).status, 403);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 function streamedRequest(body: ReadableStream<Uint8Array>, signal?: AbortSignal) {
@@ -246,7 +258,7 @@ function streamedRequest(body: ReadableStream<Uint8Array>, signal?: AbortSignal)
 
 test("malformed, invalid UTF-8, broken and oversized JSON uploads fail before calling the provider", async () => {
   let calls = 0;
-  const handler = createAnswerHandler({ env: testEnv, fetch: async () => { calls += 1; return completion(); } });
+  const handler = createAnswerHandler({ env: testEnv, fetch: async (_url, init) => { calls += 1; return successfulCompletion(init); } });
   const rawRequest = (body: BodyInit) => new Request("http://localhost:3000/api/answer", { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body });
   assert.equal((await handler(rawRequest("{broken"))).status, 400);
   const invalidUtf8 = await handler(rawRequest(new Uint8Array([123, 34, 120, 34, 58, 34, 255, 34, 125])));
@@ -286,10 +298,10 @@ test("concurrency slots release after failure and per-client rate limits are enf
   let release: (() => void) | undefined;
   let calls = 0;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const handler = createAnswerHandler({ env: testEnv, now: () => 100000, fetch: async () => {
+  const handler = createAnswerHandler({ env: testEnv, now: () => 100000, fetch: async (_url, init) => {
     calls += 1;
     if (calls === 1) { await gate; return new Response("failed", { status: 503 }); }
-    return completion();
+    return successfulCompletion(init);
   } });
   const first = handler(httpRequest());
   while (!calls) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -298,4 +310,142 @@ test("concurrency slots release after failure and per-client rate limits are enf
   assert.equal((await first).status, 502);
   for (let index = 0; index < 9; index += 1) assert.equal((await handler(httpRequest())).status, 200);
   assert.equal((await handler(httpRequest())).status, 429);
+});
+
+test("context exposes parent relationships for both full topics and summary-only targets", () => {
+  const request = input();
+  const context = buildAnswerContext(request);
+  for (const topic of [...context.payload.topics, ...context.payload.summaries]) assert.equal(topic.parentId, request.conversation.explorations[topic.id].parentId);
+});
+
+test("multi-subject output validates supplied destinations and keeps a short overview in the active topic", () => {
+  const request = input();
+  const context = buildAnswerContext(request).record;
+  const topic = { targetId: "priorities", decision: "continue", title: "Priorities", summary: "Updated priorities.", sections: [{ title: "Next steps", body: "Continue this existing subject." }] };
+  const result = validateAnswerOutput({ ...answer(), decision: "branch", topics: [topic, { ...topic, targetId: "equity", decision: "branch", title: "Equity history" }] }, request, context, "test-model");
+  assert.equal(result.decision, "continue");
+  assert.deepEqual(result.topics?.map((item) => item.targetId), ["priorities", "equity"]);
+  assert.equal(validateAnswerOutput(answer(), request, context, "test-model").topics, undefined, "legacy responses remain valid");
+  for (const topics of [
+    [{ ...topic, targetId: "invented" }],
+    [{ ...topic, targetId: request.activeId }],
+    [topic, topic],
+    Array(9).fill({ ...topic, decision: "branch" }),
+    [{ ...topic, sections: [null] }],
+  ]) assert.throws(() => validateAnswerOutput({ ...answer(), topics }, request, context, "test-model"), AnswerError);
+  assert.throws(() => validateAnswerOutput({ ...answer(), topics: [topic] }, request, { fullIds: [request.activeId], summaryIds: [], truncated: false }, "test-model"), /target/);
+  assert.throws(() => validateAnswerOutput({ ...answer(), topics: [topic] }, { ...request, mode: "branch" }, context, "test-model"), AnswerError);
+  assert.throws(() => validateAnswerOutput({ ...answer(), sections: [{ title: "Too much overview", body: "x".repeat(4000) }], topics: [topic] }, request, context, "test-model"), AnswerError);
+  assert.throws(() => validateAnswerOutput({ ...answer(), topics: Array.from({ length: 5 }, () => ({ ...topic, decision: "branch", sections: [{ title: "Long", body: "x".repeat(9000) }] })) }, request, context, "test-model"), AnswerError);
+});
+
+test("synthesis sources must be unique supplied IDs on new branches", () => {
+  const request = input();
+  const context = buildAnswerContext(request).record;
+  const valid = { ...answer(), decision: "branch", sourceIds: ["equity", "priorities"] };
+  assert.deepEqual(validateAnswerOutput(valid, request, context, "test-model").sourceIds, valid.sourceIds);
+  for (const value of [
+    { ...valid, decision: "continue" },
+    { ...valid, sourceIds: ["invented", "equity"] },
+    { ...valid, sourceIds: ["equity"] },
+    { ...valid, sourceIds: ["equity", "equity"] },
+    { ...valid, sourceIds: Array(9).fill("equity") },
+  ]) assert.throws(() => validateAnswerOutput(value, request, context, "test-model"), /synthesis/);
+});
+
+test("comparison context includes bounded direct children without unrelated descendants or siblings", () => {
+  const request = input();
+  request.activeId = request.conversation.rootId;
+  request.conversation.explorations.compensation.messages[1].sections[0].body = "DIRECT_CHILD_DETAIL";
+  request.conversation.explorations.equity.messages[1].sections[0].body = "DEEPER_DESCENDANT_DETAIL";
+  let context = buildAnswerContext(request);
+  assert.ok(context.record.fullIds.includes("compensation"));
+  assert.ok(JSON.stringify(context.payload.topics).includes("DIRECT_CHILD_DETAIL"));
+  assert.ok(!JSON.stringify(context.payload.topics).includes("DEEPER_DESCENDANT_DETAIL"));
+  assert.ok(context.record.summaryIds.includes("equity"));
+  request.activeId = "equity";
+  context = buildAnswerContext(request);
+  assert.ok(!context.record.fullIds.includes("priorities"), "unrelated siblings are not automatically included");
+
+  const space = createConversation();
+  for (let index = 0; index < 9; index++) {
+    const id = `child-${index}`;
+    space.explorations[id] = { id, title: id, summary: "A child subject.", parentId: space.rootId, source: null, position: [0, 0, 0], messages: [{ id: `child-answer-${index}`, role: "assistant", sections: [{ id: `child-section-${index}`, title: "Detail", body: "A brief detail." }] }] };
+  }
+  context = buildAnswerContext({ ...request, conversation: space, activeId: space.rootId });
+  assert.equal(context.record.fullIds.filter((id) => id.startsWith("child-")).length, 8);
+  assert.ok(context.record.summaryIds.includes("child-8"));
+  assert.equal(context.record.truncated, true);
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+});
+
+test("the shared timeout also aborts an organizer stalled after a successful writer response", async () => {
+  const schemas: string[] = [];
+  let organizerAborted = false;
+  const fetchMock: typeof fetch = async (_url, init) => {
+    const name = JSON.parse(String(init?.body)).response_format.json_schema.name;
+    schemas.push(name);
+    if (name === "metaphore_answer") return completion();
+    return new Promise((_resolve, reject) => {
+      const abort = () => { organizerAborted = true; reject(new DOMException("Aborted", "AbortError")); };
+      if (init?.signal?.aborted) abort();
+      else init?.signal?.addEventListener("abort", abort, { once: true });
+    });
+  };
+  await assert.rejects(generateAnswer(input(), { env: testEnv, fetch: fetchMock, timeoutMs: 20 }), (error: unknown) => error instanceof AnswerError && error.code === "model_timeout");
+  assert.deepEqual(schemas, ["metaphore_answer", "metaphore_organization"]);
+  assert.equal(organizerAborted, true);
+});
+
+test("organizer failure returns a recoverable error without changing the captured conversation", async () => {
+  const request = input();
+  const original = JSON.stringify(request);
+  for (const failure of [
+    { response: () => completion({ reason: "Incomplete plan", overview: "", primary: {}, topics: [] }), code: "invalid_organization" },
+    { response: () => new Response("private organizer diagnostics", { status: 503 }), code: "provider_error" },
+  ]) {
+    const schemas: string[] = [];
+    await assert.rejects(generateAnswer(request, { env: testEnv, fetch: async (_url, init) => {
+      const name = JSON.parse(String(init?.body)).response_format.json_schema.name;
+      schemas.push(name);
+      return name === "metaphore_answer" ? completion() : failure.response();
+    } }), (error: unknown) => error instanceof AnswerError && error.code === failure.code && error.retryable && !error.message.includes("private organizer diagnostics"));
+    assert.deepEqual(schemas, ["metaphore_answer", "metaphore_organization"]);
+    assert.equal(JSON.stringify(request), original);
+  }
+});
+
+test("cancellation at the end of the writer response prevents the organizer call", async () => {
+  const controller = new AbortController();
+  const schemas: string[] = [];
+  const data = new TextEncoder().encode(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(answer()) } }] }));
+  let sent = false;
+  const body = new ReadableStream<Uint8Array>({ pull(stream) {
+    if (!sent) { sent = true; stream.enqueue(data); }
+    else { stream.close(); controller.abort(); }
+  } });
+  await assert.rejects(generateAnswer(input(), { env: testEnv, fetch: async (_url, init) => {
+    schemas.push(JSON.parse(String(init?.body)).response_format.json_schema.name);
+    return new Response(body);
+  } }, controller.signal), (error: unknown) => error instanceof AnswerError && error.code === "cancelled");
+  assert.deepEqual(schemas, ["metaphore_answer"]);
+});
+
+test("user cancellation aborts an organizer already running after the writer", async () => {
+  const controller = new AbortController();
+  let organizerStarted!: () => void;
+  const started = new Promise<void>((resolve) => { organizerStarted = resolve; });
+  let organizerAborted = false;
+  const pending = generateAnswer(input(), { env: testEnv, fetch: async (_url, init) => {
+    const name = JSON.parse(String(init?.body)).response_format.json_schema.name;
+    if (name === "metaphore_answer") return completion();
+    organizerStarted();
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => { organizerAborted = true; reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    });
+  } }, controller.signal);
+  await started;
+  controller.abort();
+  await assert.rejects(pending, (error: unknown) => error instanceof AnswerError && error.code === "cancelled");
+  assert.equal(organizerAborted, true);
 });

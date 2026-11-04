@@ -2,6 +2,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { AnswerRequest, ModelStatus } from "./contracts";
 import { ANSWER_SCHEMA, AnswerError, MAX_REQUEST_BYTES, answerMessages, buildAnswerContext, validateAnswerOutput, validateAnswerRequest } from "./ai";
+import { ORGANIZER_SCHEMA, organizerMessages, organizeAnswer } from "./organizer";
 
 type Environment = Record<string, string | undefined>;
 type ProviderOptions = {
@@ -78,36 +79,42 @@ export async function generateAnswer(request: AnswerRequest, options: ProviderOp
   signal?.addEventListener("abort", cancel, { once: true });
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 55000);
   try {
-    const response = await (options.fetch ?? fetch)(config.endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: config.model,
-        messages: answerMessages(request, context),
-        response_format: { type: "json_schema", json_schema: { name: "metaphore_answer", strict: true, schema: ANSWER_SCHEMA } },
-        max_completion_tokens: 6000,
-        reasoning_effort: "low",
-        store: false,
-        stream: false,
-      }),
-      signal: controller.signal,
-      cache: "no-store",
-      redirect: "error",
-    });
-    if (!response.ok) {
-      // Never return provider bodies: they may contain credentials or request text.
-      if (response.status === 429) throw new AnswerError("provider_rate_limit", "The model is busy or its allowance has been reached. Wait a moment before retrying.", 429, true);
-      if ([401, 403].includes(response.status)) throw new AnswerError("provider_credentials", "The model credentials were rejected. Check the server configuration.", 502);
-      throw new AnswerError("provider_error", "The model could not complete this request. Your question is kept.", 502, response.status >= 500);
-    }
-    const invalid = new AnswerError("invalid_model_answer", "The model returned an incomplete answer. Your question is kept; please retry.", 502, true);
-    const raw = await limitedJson(response, RESPONSE_BYTES, invalid, invalid, controller.signal) as { choices?: { finish_reason?: string; message?: { content?: unknown; refusal?: unknown } }[] };
-    const choice = raw && typeof raw === "object" && Array.isArray(raw.choices) ? raw.choices[0] : undefined;
-    if (choice?.message?.refusal || choice?.finish_reason === "content_filter") throw new AnswerError("model_refusal", "The model could not answer that request. Try rephrasing it.", 422);
-    if (choice?.finish_reason !== "stop" || typeof choice.message?.content !== "string" || choice.message.content.length > 50000) throw invalid;
-    let answer: unknown;
-    try { answer = JSON.parse(choice.message.content); } catch { throw invalid; }
-    return validateAnswerOutput(answer, request, context.record, config.model);
+    const complete = async (messages: { role: string; content: string }[], schema: object, name: string, maximumTokens: number): Promise<unknown> => {
+      const response = await (options.fetch ?? fetch)(config.endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: config.model,
+          messages,
+          response_format: { type: "json_schema", json_schema: { name, strict: true, schema } },
+          max_completion_tokens: maximumTokens,
+          reasoning_effort: "low",
+          store: false,
+          stream: false,
+        }),
+        signal: controller.signal,
+        cache: "no-store",
+        redirect: "error",
+      });
+      if (!response.ok) {
+        // Never return provider bodies: they may contain credentials or request text.
+        if (response.status === 429) throw new AnswerError("provider_rate_limit", "The model is busy or its allowance has been reached. Wait a moment before retrying.", 429, true);
+        if ([401, 403].includes(response.status)) throw new AnswerError("provider_credentials", "The model credentials were rejected. Check the server configuration.", 502);
+        throw new AnswerError("provider_error", "The model could not complete this request. Your question is kept.", 502, response.status >= 500);
+      }
+      const invalid = new AnswerError("invalid_model_answer", "The model returned an incomplete answer. Your question is kept; please retry.", 502, true);
+      const raw = await limitedJson(response, RESPONSE_BYTES, invalid, invalid, controller.signal) as { choices?: { finish_reason?: string; message?: { content?: unknown; refusal?: unknown } }[] };
+      const choice = raw && typeof raw === "object" && Array.isArray(raw.choices) ? raw.choices[0] : undefined;
+      if (choice?.message?.refusal || choice?.finish_reason === "content_filter") throw new AnswerError("model_refusal", "The model could not answer that request. Try rephrasing it.", 422);
+      if (choice?.finish_reason !== "stop" || typeof choice.message?.content !== "string" || choice.message.content.length > 50000) throw invalid;
+      let answer: unknown;
+      try { answer = JSON.parse(choice.message.content); } catch { throw invalid; }
+      return answer;
+    };
+    const rawAnswer = await complete(answerMessages(request, context), ANSWER_SCHEMA, "metaphore_answer", 6000);
+    const answer = validateAnswerOutput(rawAnswer, request, context.record, config.model);
+    const plan = await complete(organizerMessages(request, answer), ORGANIZER_SCHEMA, "metaphore_organization", 3000);
+    return organizeAnswer(plan, request, answer);
   } catch (error) {
     if (timedOut) throw new AnswerError("model_timeout", "The model took too long. Your question is kept; please retry.", 504, true);
     if (signal?.aborted) throw new AnswerError("cancelled", "The request was cancelled. Your question is kept.", 499, true);

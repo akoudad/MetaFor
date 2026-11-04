@@ -1,8 +1,8 @@
 # Deployment
 
-The app has not been publicly deployed or visually verified. These are setup
-instructions; publication remains a separate step. It needs a Node.js server
-because live AI uses `/api/answer`.
+The local production build has been checked in native Safari; public deployment
+remains unverified. These are setup instructions, and publication remains a separate
+step. The app needs a Node.js server because live AI uses `/api/answer`.
 
 ## Configuration
 
@@ -40,7 +40,9 @@ npx next start --hostname 0.0.0.0
 Set `PORT` through the host if needed. Use HTTPS at the proxy and preserve the
 public `Host` and overwrite `x-forwarded-proto` with the actual public scheme;
 the API checks request origin and does not trust a forwarded host header.
-Allow at least 60 seconds for the answer route; its provider timeout is 55 seconds.
+Allow at least 60 seconds for the answer route. The answer writer and organizer
+run sequentially within one shared 55-second provider timeout; cancellation
+aborts the active call. The app returns only after both stages validate.
 See [Next.js deployment](https://nextjs.org/docs/app/getting-started/deploying)
 and [CLI options](https://nextjs.org/docs/app/api-reference/cli/next).
 
@@ -76,12 +78,26 @@ Set `DEMO_ACCESS_CODE` before exposing live generation. Configure provider and
 hosting spending controls and monitor usage. The app's in-memory limits are
 best effort per server instance: one in-flight request per IP, three overall,
 ten requests per IP per minute, and thirty overall. They reset on restart and
-do not coordinate across instances. They are **not a billing cap**.
+do not coordinate across instances. Limits count app requests; each completed
+answer normally uses **two paid model calls**, and retries can repeat both. They
+are **not a billing cap**.
 
 There are no user accounts or cloud conversation storage. Saved spaces belong
 to the current browser and site origin; moving from localhost to a hosted URL
 requires export/import. Live requests send the conversation snapshot to the
 server and selected context to Meta. This is not an offline-only privacy model.
+
+The optional backend checks use the already configured server:
+
+```sh
+npx tsx scripts/live-smoke.ts
+npx tsx scripts/live-graph-smoke.ts
+```
+
+Run these deliberately: the first makes up to three app requests / six paid
+model calls; the second makes up to four app requests / eight paid model calls.
+They write temporary artifacts, and the graph check supports resuming successful
+steps. See the [demo instructions](demo.md) before running either.
 
 Before sharing, run the [demo](demo.md) on the deployed URL: check a live answer,
 passage selection, return navigation, reload, export/import, access-code rejection,

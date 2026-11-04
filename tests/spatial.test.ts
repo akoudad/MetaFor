@@ -10,6 +10,7 @@ import {
   MAX_DISTANCE,
   MIN_DISTANCE,
   applyPositionOverrides,
+  connectionBounds,
   connectionEndpoints,
   detailForScale,
   fitOverview,
@@ -59,7 +60,7 @@ function assertSeparatedOverview(nodes: SpatialNode[], width: number, height: nu
   }
 }
 
-test("layout keeps semantic depth and reserves distinct lanes around each parent", () => {
+test("layout keeps semantic depth and reserves separated slots near each parent", () => {
   const space = createSampleConversation();
   const nodes = layoutSpace(space);
   assert.deepEqual(nodes, layoutSpace(space));
@@ -67,24 +68,61 @@ test("layout keeps semantic depth and reserves distinct lanes around each parent
   assert.equal(new Set(nodes.map((node) => JSON.stringify(node.position))).size, nodes.length);
   assert.deepEqual(nodes.find((node) => node.id === space.rootId)!.position, { x: 0, y: 0, z: 0 });
   for (const node of nodes) {
-    assert.equal(node.position.z || 0, -1050 * getDepth(space, node.id) || 0);
+    assert.equal(node.position.z || 0, -420 * getDepth(space, node.id) || 0);
     const peers = nodes.filter((peer) => peer.id !== node.id && peer.position.z === node.position.z);
     for (const peer of peers) assert.ok(Math.abs(peer.position.x - node.position.x) >= CARD_WIDTH || Math.abs(peer.position.y - node.position.y) >= CARD_HEIGHT);
     const parentId = space.explorations[node.id].parentId;
     if (parentId) {
       const parent = nodes.find((peer) => peer.id === parentId)!;
       assert.ok(node.position.y < parent.position.y);
-      assert.ok(parent.position.y - node.position.y > CARD_HEIGHT + 1050 * Math.tan(FIELD_OF_VIEW * Math.PI / 360));
+      assert.ok(parent.position.y - node.position.y > CARD_HEIGHT + 420 * Math.tan(FIELD_OF_VIEW * Math.PI / 360));
     }
   }
-  const firstLevel = nodes.filter((node) => space.explorations[node.id].parentId === space.rootId);
-  assert.equal(new Set(firstLevel.map((node) => node.position.x)).size, firstLevel.length);
   const compensation = nodes.find((node) => node.id === "compensation")!.position;
   const equity = nodes.find((node) => node.id === "equity")!.position;
   const vesting = nodes.find((node) => node.id === "vesting")!.position;
-  assert.equal(equity.x, compensation.x);
-  assert.equal(vesting.x, equity.x);
+  assert.ok(Math.abs(equity.x - compensation.x) <= CARD_WIDTH);
+  assert.ok(Math.abs(vesting.x - equity.x) <= CARD_WIDTH);
   assert.ok(vesting.y < equity.y && equity.y < compensation.y);
+});
+
+test("four to eight siblings form a compact readable group around their parent", () => {
+  for (let count = 4; count <= 8; count++) {
+    const nodes = layoutSpace(graph(count + 1, () => 0));
+    const children = nodes.slice(1);
+    const xs = children.map((node) => node.position.x);
+    const ys = children.map((node) => node.position.y);
+    assert.equal(new Set(ys).size, 2, "siblings should use two rows instead of a long horizontal strip");
+    assert.ok(Math.max(...xs) - Math.min(...xs) + CARD_WIDTH <= 3000);
+    assert.ok(Math.max(...ys) - Math.min(...ys) + CARD_HEIGHT <= 1200);
+    if (count === 4 || count === 8) assert.equal(Math.min(...xs) + Math.max(...xs), nodes[0].position.x * 2);
+
+    const view = fitOverview(nodes, 1440, 900);
+    const cards = projectedCards(nodes, view, 1440, 900);
+    assert.ok(cards.slice(1).every((card) => card.scale * CARD_WIDTH >= 190), "desktop sibling cards should remain readable summaries");
+    const rootBottom = cards[0].y + CARD_HEIGHT * cards[0].scale / 2;
+    const firstChildTop = Math.min(...cards.slice(1).map((card) => card.y - CARD_HEIGHT * card.scale / 2));
+    assert.ok(firstChildTop - rootBottom < 140, "the parent should not sit across a large empty vertical gap");
+    for (const [width, height] of [[1440, 900], [390, 700], [700, 390], [3840, 800]]) assertSeparatedOverview(nodes, width, height);
+  }
+});
+
+test("a synthesis sits beneath and between its sources without moving existing topics", () => {
+  const before = layoutSpace(graph(5, () => 0));
+  const space = graph(7, (index) => index === 6 ? 5 : 0);
+  space.connections = [1, 2, 3, 4].map((index) => ({
+    id: `synthesis-${index}`, from: `topic-${index}`, to: "topic-5", type: "synthesis", status: "accepted", reason: "Combined comparison",
+  }));
+  const nodes = layoutSpace(space);
+  for (const node of before) assert.deepEqual(nodes.find((value) => value.id === node.id), node);
+  const sources = nodes.filter((node) => ["topic-1", "topic-2", "topic-3", "topic-4"].includes(node.id));
+  const synthesis = nodes.find((node) => node.id === "topic-5")!;
+  assert.equal(space.explorations[synthesis.id].parentId, space.rootId, "visual source placement must not change navigation ancestry");
+  assert.equal(synthesis.position.x, sources.reduce((sum, node) => sum + node.position.x, 0) / sources.length);
+  assert.ok(sources.every((node) => synthesis.position.y < node.position.y && synthesis.position.z < node.position.z));
+  const child = nodes.find((node) => node.id === "topic-6")!;
+  assert.ok(child.position.z < synthesis.position.z && child.position.y < synthesis.position.y);
+  for (const [width, height] of [[1440, 900], [390, 700], [3840, 800]]) assertSeparatedOverview(nodes, width, height);
 });
 
 test("fitted overviews separate projected cards across broad, mixed, and 200-level graphs", () => {
@@ -98,7 +136,7 @@ test("fitted overviews separate projected cards across broad, mixed, and 200-lev
   for (const space of spaces) {
     const nodes = layoutSpace(space);
     assert.ok(nodes.every((node) => Object.values(node.position).every((value) => Number.isFinite(value) && Math.abs(value) < 1e6)));
-    for (const [width, height] of [[1440, 900], [390, 700], [700, 390], [2560, 1080]]) assertSeparatedOverview(nodes, width, height);
+    for (const [width, height] of [[1440, 900], [390, 700], [700, 390], [2560, 1080], [3840, 800]]) assertSeparatedOverview(nodes, width, height);
   }
 });
 
@@ -150,7 +188,7 @@ test("position overrides move only requested nodes and leave the conversation un
   assert.deepEqual(applyPositionOverrides(defaults, {}), defaults, "clearing overrides restores the automatic layout");
 });
 
-test("manual placement stays literal while remaining automatic rows stay separated", () => {
+test("manual placement stays literal while remaining automatic groups stay separated", () => {
   const base = layoutSpace(graph(80, (index) => Math.floor((index - 1) / 3)));
   const manual = { x: -18_000, y: 15_000, z: -3000 };
   const nodes = applyPositionOverrides(base, { "topic-4": manual, "topic-5": manual });
@@ -184,6 +222,23 @@ test("overlapping and invalid card projections never create reversed or invalid 
   assert.equal(connectionEndpoints(card, { x: 500, y: 100, scale: 1 }), null);
   assert.equal(connectionEndpoints(card, { x: NaN, y: 100, scale: 1 }), null);
   assert.equal(connectionEndpoints(card, { x: 1000, y: 100, scale: 0 }), null);
+  assert.equal(connectionEndpoints(card, { x: 1000, y: 100, scale: 1, width: NaN }), null);
+});
+
+test("collapsed link endpoints meet the visible label bounds rather than the hidden full card", () => {
+  const source = { x: 100, y: 100, scale: 0.2 };
+  const target = { x: 100, y: 300, scale: 0.2 };
+  const full = connectionEndpoints(source, target)!;
+  const titleSource = connectionBounds(source, "title");
+  const titleTarget = connectionBounds(target, "title");
+  const title = connectionEndpoints(titleSource, titleTarget)!;
+  assert.ok(title.start.y < full.start.y - 25);
+  assert.ok(title.end.y > full.end.y + 25, "the arrow should reach the label instead of floating above its invisible card");
+  assert.ok(Math.abs(title.end.y - (titleTarget.y - titleTarget.height! / 2 - 7)) < 1e-9);
+  const summary = connectionBounds({ ...source, scale: 0.4 }, "summary");
+  assert.ok(summary.height! < CARD_HEIGHT * 0.4 / 2);
+  assert.equal(summary.width, CARD_WIDTH * 0.4);
+  assert.deepEqual(connectionBounds(source, "full"), source, "full reading cards keep their existing edge geometry");
 });
 
 test("overview fits every full card inside landscape and portrait viewports", () => {

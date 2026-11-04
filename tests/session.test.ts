@@ -114,3 +114,103 @@ test("stale results and malformed sections fail without changing the conversatio
   const malformed = { ...answer(input), sections: [null] } as unknown as AnswerResult;
   assert.throws(() => applyAnswer(space, input, malformed), (error) => error instanceof Error && !(error instanceof TypeError) && /section/.test(error.message));
 });
+
+function moroccoCities() {
+  const space = createConversation();
+  const input = { ...request(space), requestId: "morocco-cities", question: "Explain Rabat, Fes, Marrakech, and Tangier in separate detail." };
+  const response: AnswerResult = {
+    ...answer(input), title: "Morocco", summary: "Four cities to explore.",
+    sections: [{ title: "Cities", body: "Explore these Moroccan cities individually." }],
+    topics: ["Rabat", "Fes", "Marrakech", "Tangier"].map((title) => ({ targetId: space.rootId, decision: "branch", title, summary: `An overview of ${title}.`, sections: [{ title: "Overview", body: `A separate sample overview of ${title}.` }] })),
+  };
+  return { input, response, result: applyAnswer(space, input, response) };
+}
+
+test("one answer creates four city topics and a later answer places histories under the corresponding cities", () => {
+  const { result: cities } = moroccoCities();
+  assert.equal(cities.destinationId, cities.conversation.rootId);
+  assert.equal(cities.destinationIds.length, 5);
+  assert.deepEqual(cities.topicIds.map((id) => cities.conversation.explorations[id].title), ["Rabat", "Fes", "Marrakech", "Tangier"]);
+  assert.ok(cities.topicIds.every((id) => cities.conversation.explorations[id].parentId === cities.conversation.rootId));
+  const selection = { explorationId: cities.conversation.rootId, messageId: "answer-morocco-cities", sectionId: "section-morocco-cities-0", quote: "Moroccan cities" };
+  const input = { ...request(cities.conversation, selection), requestId: "city-histories", question: "Explain the histories of Rabat, Fes, and Marrakech." };
+  const response: AnswerResult = { ...answer(input), sections: [{ title: "Histories", body: "Each history follows its city." }], context: { fullIds: [input.activeId], summaryIds: cities.topicIds, truncated: false }, topics: cities.topicIds.slice(0, 3).map((targetId) => ({ targetId, decision: "branch", title: `${cities.conversation.explorations[targetId].title} history`, summary: "A focused historical overview.", sections: [{ title: "History", body: "Sample historical discussion." }] })) };
+  const original = JSON.stringify(cities.conversation);
+  const histories = applyAnswer(cities.conversation, input, response);
+  assert.equal(histories.destinationId, cities.conversation.rootId);
+  histories.topicIds.forEach((id, index) => {
+    const history = histories.conversation.explorations[id];
+    assert.equal(history.parentId, cities.topicIds[index]);
+    assert.equal(history.source, null, "a cross-target source must not pretend to come from the city parent");
+    assert.deepEqual(history.messages[0].source, selection);
+    assert.deepEqual(history.messages[1].source, selection);
+    assert.equal(history.messages[1].requestId, undefined);
+  });
+  assert.equal(JSON.stringify(cities.conversation), original);
+  validateConversation(histories.conversation);
+});
+
+test("multi-topic replay returns every destination even if the retry payload changes", () => {
+  const { input, response, result } = moroccoCities();
+  const replay = applyAnswer(result.conversation, input, { ...response, topics: [], title: "A different retry" });
+  assert.equal(replay.conversation, result.conversation);
+  assert.deepEqual(replay.destinationIds, result.destinationIds);
+  assert.deepEqual(replay.topicIds, result.topicIds);
+  assert.equal(Object.values(replay.conversation.explorations).flatMap((item) => item.messages).filter((message) => message.role === "assistant" && message.requestId === input.requestId).length, 1);
+});
+
+test("an existing subject is continued without duplicating it or changing its established title", () => {
+  const { result: cities } = moroccoCities();
+  const targetId = cities.topicIds[0];
+  const input = { ...request(cities.conversation), requestId: "continue-rabat" };
+  const response: AnswerResult = { ...answer(input), context: { fullIds: [input.activeId], summaryIds: cities.topicIds, truncated: false }, topics: [{ targetId, decision: "continue", title: "Replacement title", summary: "Rabat with the new comparison incorporated.", sections: [{ title: "More detail", body: "An additional sample detail." }] }] };
+  const result = applyAnswer(cities.conversation, input, response);
+  assert.equal(Object.keys(result.conversation.explorations).length, 5);
+  assert.equal(result.conversation.explorations[targetId].title, "Rabat");
+  assert.equal(result.conversation.explorations[targetId].summary, response.topics![0].summary);
+  assert.equal(result.conversation.explorations[targetId].messages.length, 4);
+  assert.deepEqual(result.topicIds, [targetId]);
+});
+
+test("invalid later parts and generated-ID collisions leave the whole original conversation untouched", () => {
+  const { result: cities } = moroccoCities();
+  const input = { ...request(cities.conversation), requestId: "invalid-batch" };
+  const good = { targetId: cities.topicIds[0], decision: "branch" as const, title: "History", summary: "History detail.", sections: [{ title: "Detail", body: "Sample text." }] };
+  const response: AnswerResult = { ...answer(input), context: { fullIds: [input.activeId], summaryIds: cities.topicIds, truncated: false }, topics: [good, { ...good, targetId: "invented-city" }] };
+  const original = JSON.stringify(cities.conversation);
+  assert.throws(() => applyAnswer(cities.conversation, input, response), /target/);
+  assert.equal(JSON.stringify(cities.conversation), original);
+  const malformed = { ...response, topics: [good, { ...good, sections: [null] }] } as unknown as AnswerResult;
+  assert.throws(() => applyAnswer(cities.conversation, input, malformed), (error) => error instanceof Error && !(error instanceof TypeError));
+  assert.equal(JSON.stringify(cities.conversation), original);
+  const collision = structuredClone(cities.conversation);
+  collision.explorations[collision.rootId].messages[0].sections[0].id = "topic-section-invalid-batch-1-0";
+  const beforeCollision = JSON.stringify(collision);
+  assert.throws(() => applyAnswer(collision, input, { ...response, topics: [good, good] }), /Duplicate.*section/);
+  assert.equal(JSON.stringify(collision), beforeCollision);
+});
+
+test("a single synthesis creates directed accepted provenance links without deleting its sources", () => {
+  const { result: cities } = moroccoCities();
+  const input = { ...request(cities.conversation), requestId: "combine-cities", question: "Combine the useful ideas from these cities." };
+  const response: AnswerResult = { ...answer(input), sourceIds: cities.topicIds.slice(0, 3), context: { fullIds: [input.activeId], summaryIds: cities.topicIds, truncated: false } };
+  const result = applyAnswer(cities.conversation, input, response);
+  const links = result.conversation.connections!.filter((link) => link.type === "synthesis");
+  assert.equal(result.conversation.explorations[result.destinationId].parentId, input.activeId);
+  assert.deepEqual(links.map((link) => link.from), response.sourceIds);
+  assert.ok(links.every((link) => link.to === result.destinationId && link.status === "accepted"));
+  for (const id of cities.topicIds) assert.deepEqual(result.conversation.explorations[id], cities.conversation.explorations[id]);
+  validateConversation(result.conversation);
+});
+
+test("multiple synthesis outputs remain atomic and each keeps its own source set", () => {
+  const { result: cities } = moroccoCities();
+  const input = { ...request(cities.conversation), requestId: "two-syntheses" };
+  const topic = { targetId: input.activeId, decision: "branch" as const, title: "Combined comparison", summary: "A combined view.", sections: [{ title: "Comparison", body: "Sample combined interpretation." }] };
+  const response: AnswerResult = { ...answer(input), context: { fullIds: [input.activeId], summaryIds: cities.topicIds, truncated: false }, topics: [{ ...topic, sourceIds: cities.topicIds.slice(0, 2) }, { ...topic, sourceIds: cities.topicIds.slice(2) }] };
+  const result = applyAnswer(cities.conversation, input, response);
+  result.topicIds.forEach((id, index) => assert.deepEqual(result.conversation.connections!.filter((link) => link.type === "synthesis" && link.to === id).map((link) => link.from), response.topics![index].sourceIds));
+  const original = JSON.stringify(cities.conversation);
+  assert.throws(() => applyAnswer(cities.conversation, input, { ...response, topics: [response.topics![0], { ...response.topics![1], sourceIds: ["invented-city", cities.topicIds[3]] }] }), /synthesis/);
+  assert.equal(JSON.stringify(cities.conversation), original);
+});

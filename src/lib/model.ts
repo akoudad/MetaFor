@@ -39,7 +39,7 @@ export type Connection = {
   id: string;
   from: string;
   to: string;
-  type: "related";
+  type: "related" | "synthesis";
   reason: string;
   status: "suggested" | "accepted";
 };
@@ -307,8 +307,9 @@ export function validateConversation(value: unknown): asserts value is Conversat
         if (!Object.hasOwn(explorations, connection[key])) throw new Error("Connection refers to a missing exploration.");
       }
       if (connection.from === connection.to) throw new Error("A connection must link different explorations.");
-      if (connection.type !== "related") throw new Error("Unsupported connection type.");
+      if (connection.type !== "related" && connection.type !== "synthesis") throw new Error("Unsupported connection type.");
       if (connection.status !== "suggested" && connection.status !== "accepted") throw new Error("Connection status must be suggested or accepted.");
+      if (connection.type === "synthesis" && connection.status !== "accepted") throw new Error("A synthesis connection must be accepted.");
       text(connection.reason, "Connection reason", 3000);
     }
   }
