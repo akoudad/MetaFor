@@ -12,7 +12,10 @@ connections, independently of where topics appear on screen.
    answer from a Meta model. No prewritten job conversation opens by default.
    On submission the input clears, and the question appears in a pending card.
    You can write the next draft while waiting.
-2. Select a passage or a section and ask about it. The model keeps a clarification
+2. Select a passage and click **Ask about this** beside the highlight. The quote
+   attaches above the question input, which receives focus without losing your
+   draft. Highlighting alone does not attach it or submit anything. You can also
+   use a section's ask action. The model keeps a clarification
    in the current topic or opens a connected topic for a separate exploration.
    Placement is automatic; there are no branch/continue controls to manage.
 3. Follow the new topic while its source remains intact. A selected passage keeps
@@ -43,6 +46,10 @@ topic. Its diamond marks the camera destination. The space stays monochrome,
 with a softly colored input orb, a star cursor, and a slowly drifting starfield.
 Text keeps its normal selection cursor. Reduced motion disables the ambient
 movement and the arrival journey.
+
+The selection action stays within the visible reading area. Escape, an outside
+click, scrolling, or navigation dismisses it; Escape here does not leave the
+topic. The attached quote remains removable before sending.
 
 The **Connections** panel separates suggested relationships from those you keep.
 Use **Include in next question** to explicitly add another topic's context.

@@ -62,6 +62,11 @@ Navigation parents form a tree; separate related connections may contain cycles.
 Source selections must match rendered text within one assistant message, including
 selections across its sections. App-assigned IDs preserve existing answer text.
 
+Text selection first creates a temporary, range-positioned action. Choosing
+**Ask about this** commits its validated source reference and focuses the composer.
+The preview is not saved or sent. Selection-handle changes are debounced; scroll,
+resize, navigation, or dismissal removes the action to avoid a stale screen anchor.
+
 ## Answer flow
 
 1. Capture the question, target, selection, placement mode, and explicitly included

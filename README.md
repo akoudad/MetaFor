@@ -13,8 +13,8 @@ ask about it, explore the detail, and return to the original answer.
 
 - **Ask naturally.** Start with an empty chat. The AI decides whether a follow-up
   belongs in the current topic or needs its own connected space.
-- **Explore a passage.** Select text in any answer. Its exact source stays attached
-  to the new discussion.
+- **Explore a passage.** Select text in any answer and click **Ask about this**
+  beside it. The quote attaches to your question and keeps its exact source.
 - **Move between levels.** Zoom from the overview into a topic. Scroll inside it
   to read; use the mini-map, navigation rail, or source link to return.
 - **Arrange your space.** Drag topics into place. Reset layout restores their

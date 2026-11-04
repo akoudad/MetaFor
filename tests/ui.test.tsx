@@ -63,6 +63,11 @@ before(async () => {
     set(value: number) { scrollPositions.set(this, Math.max(0, Math.min(this.scrollHeight - this.clientHeight, Number(value) || 0))); },
   });
   dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 600, bottom: 413, width: 600, height: 413, toJSON() { return {}; } });
+  Object.defineProperty(dom.window.Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new dom.window.DOMRect(180, 200, 220, 20) });
+  Object.defineProperty(dom.window.Range.prototype, "getClientRects", { configurable: true, value: () => {
+    const rect = new dom.window.DOMRect(180, 200, 220, 20);
+    return { 0: rect, length: 1, item: (index: number) => index === 0 ? rect : null, [Symbol.iterator]: () => [rect].values() };
+  } });
   dom.window.HTMLElement.prototype.hasPointerCapture = () => false;
   dom.window.HTMLElement.prototype.setPointerCapture = () => {};
   dom.window.HTMLElement.prototype.releasePointerCapture = () => {};
@@ -163,7 +168,10 @@ function activeTopic() {
   return ui.screen.getByRole("navigation", { name: "Conversation navigation" }).querySelector('[aria-current="location"]')?.getAttribute("aria-label");
 }
 
-function selectPassage(element: Element, quote: string) {
+function previewPassage(element: Element, quote: string) {
+  // Real pointer selection focuses the reading surface rather than leaving a
+  // previously edited textarea focused with a stale document selection.
+  ui.act(() => element.closest<HTMLElement>(".topic-reading")?.focus());
   const walker = document.createTreeWalker(element, dom.window.NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
   while (walker.nextNode()) nodes.push(walker.currentNode as Text);
@@ -185,6 +193,179 @@ function selectPassage(element: Element, quote: string) {
   selection.removeAllRanges(); selection.addRange(range);
   ui.fireEvent.pointerUp(element, { pointerId: 1, button: 0 });
 }
+
+function selectPassage(element: Element, quote: string) {
+  previewPassage(element, quote);
+  const action = ui.screen.getByRole("button", { name: "Ask about this" });
+  ui.fireEvent.pointerDown(action, { button: 0 });
+  ui.fireEvent.click(action);
+}
+
+test("selecting text offers an action without attaching context, calling the model, or taking focus", async () => {
+  const user = await open(fixture("weather"));
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Keep my existing draft");
+  const reader = document.querySelector<HTMLElement>('[data-topic="weather"] .topic-reading')!;
+  ui.act(() => reader.focus());
+  const before = activeTopic();
+  previewPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, "wind exposure before choosing the roof");
+  assert.ok(ui.screen.getByRole("button", { name: "Ask about this" }));
+  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.activeElement, reader);
+  assert.equal(composer.value, "Keep my existing draft");
+  assert.equal(activeTopic(), before);
+  assert.equal(requests.length, 0);
+  ui.fireEvent.pageHide(window);
+  const saved = (await storage.loadSnapshot("ui-observatory"))!;
+  assert.equal(saved.view.places.weather.selection, null, "an uncommitted preview is not saved as question context");
+});
+
+test("Ask about this attaches the exact rendered quote, preserves the draft, and focuses the composer", async () => {
+  const user = await open(fixture("weather"));
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "How does this affect my design?");
+  const quote = "wind exposure before choosing the roof";
+  previewPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
+  await user.click(ui.screen.getByRole("button", { name: "Ask about this" }));
+  assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
+  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  assert.equal(document.activeElement, composer);
+  assert.equal(composer.value, "How does this affect my design?");
+  assert.equal(requests.length, 0);
+  ui.fireEvent.pageHide(window);
+  const saved = (await storage.loadSnapshot("ui-observatory"))!;
+  assert.deepEqual(saved.view.places.weather.selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
+  assert.equal(saved.view.places.weather.draft, "How does this affect my design?");
+});
+
+test("a cross-message selection removes an earlier preview and cannot attach a stale quote", async () => {
+  await open(fixture("weather"));
+  const first = document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!;
+  const second = document.querySelector('[data-section-id="rain-notes"] .answer-markdown p')!;
+  previewPassage(first, "wind exposure");
+  assert.ok(ui.screen.getByRole("button", { name: "Ask about this" }));
+  const range = document.createRange();
+  range.setStart(first.firstChild!, 0);
+  range.setEnd(second.firstChild!, 5);
+  const selection = dom.window.getSelection()!;
+  selection.removeAllRanges(); selection.addRange(range);
+  ui.fireEvent.pointerUp(second, { pointerId: 1, button: 0 });
+  assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
+  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(requests.length, 0);
+});
+
+test("one selected passage can cross sections of the same answer without including Ask controls", async () => {
+  const initial = fixture("weather");
+  initial.conversation.explorations.weather.messages[0].sections.push({ id: "wind-meaning", title: "How to compare", body: "Use the same measurement height each day." });
+  const user = await open(initial);
+  const first = document.querySelector('[data-section-id="wind-notes"] .answer-markdown strong')!.firstChild!;
+  const second = document.querySelector('[data-section-id="wind-meaning"] .answer-markdown p')!.firstChild!;
+  const reader = document.querySelector<HTMLElement>('[data-topic="weather"] .topic-reading')!;
+  ui.act(() => reader.focus());
+  const range = document.createRange();
+  range.setStart(first, 0);
+  range.setEnd(second, "Use the same measurement height".length);
+  const chosen = dom.window.getSelection()!;
+  chosen.removeAllRanges(); chosen.addRange(range);
+  const nativeText = chosen.toString();
+  ui.fireEvent.pointerUp(second.parentElement!, { pointerId: 1, button: 0 });
+  const action = ui.screen.queryByRole("button", { name: "Ask about this" });
+  assert.ok(action, `Expected a same-answer selection action. Native range text: ${nativeText}`);
+  await user.click(action);
+  const quote = "wind exposure before choosing the roof. Keep a log of storms. How to compare Use the same measurement height";
+  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  ui.fireEvent.pageHide(window);
+  const saved = (await storage.loadSnapshot("ui-observatory"))!;
+  assert.deepEqual(saved.view.places.weather.selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", endSectionId: "wind-meaning", quote });
+  assert.equal(requests.length, 0);
+});
+
+test("selection action stays within a horizontally offset visual viewport", async () => {
+  const originalViewport = Object.getOwnPropertyDescriptor(dom.window, "visualViewport");
+  const originalRects = Object.getOwnPropertyDescriptor(dom.window.Range.prototype, "getClientRects")!;
+  const originalBounds = Object.getOwnPropertyDescriptor(dom.window.Range.prototype, "getBoundingClientRect")!;
+  const rect = new dom.window.DOMRect(105, 200, 20, 20);
+  Object.defineProperty(dom.window, "visualViewport", { configurable: true, value: { offsetLeft: 100, offsetTop: 0, width: 300, height: 700, addEventListener() {}, removeEventListener() {} } });
+  Object.defineProperty(dom.window.Range.prototype, "getBoundingClientRect", { configurable: true, value: () => rect });
+  Object.defineProperty(dom.window.Range.prototype, "getClientRects", { configurable: true, value: () => [rect] });
+  try {
+    await open(fixture("weather"));
+    previewPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, "wind exposure");
+    const action = ui.screen.getByRole("button", { name: "Ask about this" });
+    const x = Number.parseFloat(action.style.left);
+    assert.ok(x >= 108, "action stays right of the visible viewport's left inset");
+    assert.ok(x + 156 <= 392, "action stays left of the visible viewport's right inset");
+  } finally {
+    ui.cleanup();
+    if (originalViewport) Object.defineProperty(dom.window, "visualViewport", originalViewport);
+    else Reflect.deleteProperty(dom.window, "visualViewport");
+    Object.defineProperty(dom.window.Range.prototype, "getClientRects", originalRects);
+    Object.defineProperty(dom.window.Range.prototype, "getBoundingClientRect", originalBounds);
+  }
+});
+
+test("textarea selection changes cannot revive a stale answer-selection action", async () => {
+  const user = await open(fixture("weather"));
+  const paragraph = document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!;
+  previewPassage(paragraph, "wind exposure");
+  const staleRange = dom.window.getSelection()!.getRangeAt(0).cloneRange();
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.click(composer);
+  await user.type(composer, "Keep editing this draft");
+  const selected = dom.window.getSelection()!;
+  selected.removeAllRanges(); selected.addRange(staleRange);
+  ui.fireEvent(document, new dom.window.Event("selectionchange"));
+  await ui.act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+  assert.equal(document.activeElement, composer);
+  assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
+  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(composer.value, "Keep editing this draft");
+  assert.equal(requests.length, 0);
+});
+
+test("selection previews dismiss on Escape, outside pointer, scrolling, resize, and topic navigation", async () => {
+  const user = await open(fixture("weather"));
+  const paragraph = document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!;
+  const preview = () => {
+    previewPassage(paragraph, "wind exposure");
+    assert.ok(ui.screen.getByRole("button", { name: "Ask about this" }));
+  };
+  const dismissed = () => assert.equal(Boolean(ui.screen.queryByRole("button", { name: "Ask about this" })), false, "the selection action must stay dismissed");
+  preview();
+  ui.fireEvent.keyDown(window, { key: "Escape" });
+  dismissed();
+  await ui.act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+  dismissed();
+  assert.equal(activeTopic(), "Go to Weather records", "Escape dismisses the action before navigating back");
+  preview();
+  ui.fireEvent.pointerDown(document.body, { button: 0 });
+  dismissed();
+  preview();
+  ui.fireEvent.scroll(document.querySelector('[data-topic="weather"] .topic-reading')!);
+  dismissed();
+  preview();
+  ui.fireEvent.resize(window);
+  dismissed();
+  preview();
+  await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  dismissed();
+  assert.equal(activeTopic(), "Go to Choose equipment");
+  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(requests.length, 0);
+});
+
+test("section Ask controls still attach a source directly without submitting a question", async () => {
+  const user = await open(fixture("weather"));
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Keep this draft");
+  await user.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
+  assert.equal(document.querySelector(".selection-chip p")?.textContent, "Watch the wind");
+  assert.equal(document.activeElement, composer);
+  assert.equal(composer.value, "Keep this draft");
+  assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
+  assert.equal(requests.length, 0);
+});
 
 test("a fresh chat is empty and its first answer is placed automatically", async () => {
   answer = (request) => Response.json(result(request, "continue"));

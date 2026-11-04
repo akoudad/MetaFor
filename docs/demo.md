@@ -19,7 +19,8 @@ if you use it.
 2. **0:20–0:55 · Ask.** “Explain how a browser decides whether to use a cached HTTP response.
    Cover freshness, Cache-Control, ETag revalidation, and one small example.”
    While waiting: “An answer starts as one readable topic.”
-3. **0:55–1:30 · Explore.** Highlight the sentence about ETag. Ask: “Walk me
+3. **0:55–1:30 · Explore.** Highlight the sentence about ETag and click **Ask about this**.
+   The passage appears above the focused input. Ask: “Walk me
    through ETag validation in depth, with a request and a 304 response.”
    “The model places the follow-up automatically; the app keeps the exact passage
    it came from.” If a new topic opens, let the source-to-detail movement finish

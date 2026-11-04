@@ -14,6 +14,7 @@
 | The sent question remained in the composer while its answer was pending. | Clear the input on submission; store the unfinished request separately from the next draft. | UI tests cover immediate clearing, identical next drafts, failed and stopped requests, retry, and reload without automatic sending. |
 | New topics appeared without showing their relationship to the source. | Reveal the source, child, and connection before moving into the answer; show the wider shape in a navigable mini-map. | Geometry tests cover the transition and map; manual-frame component checks cover interruption, reduced motion, hidden tabs, and cleanup. Visual acceptance remains pending. |
 | Changing context for the next question could let an arriving answer clear that choice. | Treat context-checkbox changes as user interaction, preventing automatic follow. | UI regression verifies the active topic and next context choice survive the returning answer. |
+| Selecting text gave no nearby reply action. | Show Ask about this beside the highlight; attach the quote and focus the input only when chosen. | Component tests cover draft preservation, cross-section quotes without UI controls, invalid selections, dismissal, and viewport clamping. |
 
 Saved-chat tests cover returning to unfinished drafts, keeping legacy samples
 without opening them by default, failed-save recovery, and resetting placement

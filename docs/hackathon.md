@@ -5,7 +5,7 @@ Local release candidate · 2026-11-04
 ## Implemented and checked
 
 - [x] Real Meta answers with readable sections.
-- [x] Select text in any completed answer and ask about that passage.
+- [x] Select text in any completed answer; use the nearby Ask about this action to reply.
 - [x] Automatic topic placement with no branch/continue controls in the interface.
 - [x] Retain drafts, selected passages, reading positions, and camera views.
 - [x] Keep a returning answer attached to its original question without stealing focus.
@@ -21,7 +21,7 @@ Local release candidate · 2026-11-04
 
 ## Verification
 
-- 100 automated tests pass, including 27 integrated conversation UI tests and
+- 108 automated tests pass, including 35 integrated conversation UI tests and
   three mini-map/scene DOM tests.
 - Type checking and the production build pass.
 - Three real `muse-spark-1.3` calls during backend verification covered the first answer,

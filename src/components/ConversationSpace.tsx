@@ -20,7 +20,20 @@ type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReferenc
 type Pointer = { x: number; y: number };
 type Pending = { request: AnswerRequest; error?: string; navigation: number };
 type TopicTransition = { key: string; fromId: string; toId: string; follow: boolean };
+type SelectionPreview = { source: SourceReference; x: number; y: number };
 const INITIAL_VIEW = { x: 0, y: 0, z: 900 };
+
+function selectedAnswerText(range: Range): string {
+  const fragment = range.cloneContents();
+  fragment.querySelectorAll("[data-no-selection]").forEach((element) => element.remove());
+  const textOf = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    const text = Array.from(node.childNodes).map(textOf).join("");
+    const block = node.nodeType === Node.ELEMENT_NODE && /^(DIV|SECTION|P|H[1-6]|BR|LI|UL|OL|BLOCKQUOTE|PRE|TABLE|THEAD|TBODY|TR|TD|TH)$/.test((node as Element).tagName);
+    return block ? `\n${text}\n` : text;
+  };
+  return normalizeText(textOf(fragment));
+}
 
 export default function ConversationSpace() {
   const [space, setSpace] = useState(createConversation);
@@ -40,6 +53,17 @@ export default function ConversationSpace() {
   const [selection, setSelectionState] = useState<SourceReference | null>(null);
   const selectionNow = useRef<SourceReference | null>(null);
   const setSelection = useCallback((value: SourceReference | null) => { selectionNow.current = value; setSelectionState(value); }, []);
+  const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
+  const selectionAction = useRef<HTMLButtonElement>(null);
+  const selectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dismissedRange = useRef<Range | null>(null);
+  const dismissSelectionPreview = useCallback(() => {
+    if (selectionTimer.current) clearTimeout(selectionTimer.current);
+    selectionTimer.current = null;
+    const chosen = window.getSelection();
+    dismissedRange.current = chosen && !chosen.isCollapsed && chosen.rangeCount ? chosen.getRangeAt(0).cloneRange() : null;
+    setSelectionPreview(null);
+  }, []);
   const [includeIds, setIncludeIds] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [help, setHelp] = useState(false);
@@ -95,13 +119,14 @@ export default function ConversationSpace() {
   useEffect(() => { viewNow.current = view; activeNow.current = activeId; spaceNow.current = space; }, [view, activeId, space]);
 
   const markInteraction = useCallback(() => {
+    dismissSelectionPreview();
     navigation.current += 1;
     if (transitionNow.current) {
       // A text edit or selection has no new camera target of its own. Stop an
       // arrival journey at the rendered camera instead of continuing it behind typing.
       setCamera({ ...renderedView.current }); setTransition(null);
     }
-  }, [setTransition]);
+  }, [dismissSelectionPreview, setTransition]);
 
   const remember = useCallback(() => {
     const id = activeNow.current;
@@ -291,6 +316,7 @@ export default function ConversationSpace() {
       const target = event.target as HTMLElement;
       if (event.defaultPrevented || switchingNow.current) return;
       if (event.key === "Escape") {
+        if (selectionPreview) { event.preventDefault(); dismissSelectionPreview(); return; }
         if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); }
         else if (started) back();
         return;
@@ -304,7 +330,7 @@ export default function ConversationSpace() {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom]);
+  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom, selectionPreview, dismissSelectionPreview]);
 
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (switchingNow.current) return;
@@ -338,32 +364,88 @@ export default function ConversationSpace() {
       setCamera({ ...current, x: current.x - (event.clientX - previous.x) / scale, y: current.y + (event.clientY - previous.y) / scale });
     }
   };
-  const captureSelection = () => {
-    if (switchingNow.current) return;
+  const captureSelection = useCallback((explicit = false) => {
+    if (selectionTimer.current) clearTimeout(selectionTimer.current);
+    selectionTimer.current = null;
+    if (switchingNow.current) { dismissSelectionPreview(); return; }
+    if (document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) { dismissSelectionPreview(); return; }
     const chosen = window.getSelection();
-    if (!chosen || chosen.isCollapsed || !chosen.rangeCount) return;
+    if (!chosen || chosen.isCollapsed || !chosen.rangeCount) {
+      // Keyboard focus on the action can collapse a browser's native selection.
+      // The captured source remains valid until the user chooses or dismisses it.
+      if (document.activeElement !== selectionAction.current) dismissSelectionPreview();
+      return;
+    }
     const range = chosen.getRangeAt(0);
+    const dismissed = dismissedRange.current;
+    if (!explicit && dismissed && range.startContainer === dismissed.startContainer && range.startOffset === dismissed.startOffset && range.endContainer === dismissed.endContainer && range.endOffset === dismissed.endOffset) return;
     const element = (node: Node) => node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+    if (element(range.startContainer)?.closest("[data-no-selection]") || element(range.endContainer)?.closest("[data-no-selection]")) { dismissSelectionPreview(); return; }
     const start = element(range.startContainer)?.closest<HTMLElement>("[data-section-id]");
     const end = element(range.endContainer)?.closest<HTMLElement>("[data-section-id]");
     const answer = start?.closest<HTMLElement>("[data-message-id]");
-    if (!start || !end || !answer || answer !== end.closest("[data-message-id]")) return;
-    const quote = normalizeText(chosen.toString());
-    if (!quote) return;
-    if (quote.length > 12000) { setNotice("Select a shorter passage, up to 12,000 characters."); return; }
+    if (!start || !end || !answer || !stage.current?.contains(answer) || answer !== end.closest("[data-message-id]")) { dismissSelectionPreview(); return; }
+    const quote = selectedAnswerText(range);
+    if (!quote) { dismissSelectionPreview(); return; }
+    if (quote.length > 12000) { dismissSelectionPreview(); setNotice("Select a shorter passage, up to 12,000 characters."); return; }
     const id = answer.dataset.explorationId!;
-    const message = space.explorations[id]?.messages.find((item) => item.id === answer.dataset.messageId);
-    if (!message || !normalizeText(messageText(message)).includes(quote)) { setNotice("That selection crosses content outside the answer. Select the passage again."); return; }
-    activate(id); markInteraction();
-    setSelection({ explorationId: id, messageId: message.id, sectionId: start.dataset.sectionId!, ...(end !== start ? { endSectionId: end.dataset.sectionId! } : {}), quote });
+    const message = spaceNow.current.explorations[id]?.messages.find((item) => item.id === answer.dataset.messageId);
+    if (!message || message.role !== "assistant" || !normalizeText(messageText(message)).includes(quote)) { dismissSelectionPreview(); setNotice("That selection crosses content outside the answer. Select the passage again."); return; }
+    const bounds = stage.current.getBoundingClientRect();
+    const reader = start.closest(".topic-reading")?.getBoundingClientRect() ?? bounds;
+    const viewport = window.visualViewport;
+    const left = Math.max(0, viewport?.offsetLeft ?? 0, bounds.left, reader.left);
+    const right = Math.min((viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth), bounds.right, reader.right);
+    const top = Math.max(0, viewport?.offsetTop ?? 0, bounds.top, reader.top);
+    const bottom = Math.min((viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight), bounds.bottom, reader.bottom);
+    const rects = typeof range.getClientRects === "function" ? Array.from(range.getClientRects()) : [];
+    const visible = rects.filter((rect) => rect.width > 0 && rect.height > 0 && rect.right > left && rect.left < right && rect.bottom > top && rect.top < bottom);
+    const rect = visible[visible.length - 1] ?? (typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : start.getBoundingClientRect());
+    if (rect.bottom <= top || rect.top >= bottom || rect.right <= left || rect.left >= right || right <= left || bottom <= top) { dismissSelectionPreview(); return; }
+    const width = 156;
+    const height = 36;
+    const viewportLeft = Math.max(bounds.left, viewport?.offsetLeft ?? 0);
+    const viewportRight = Math.min(bounds.right, (viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth));
+    const x = Math.max(viewportLeft + 8, Math.min((rect.left + rect.right) / 2 - width / 2, viewportRight - width - 8));
+    const y = Math.max(top + 8, Math.min(rect.top - height - 8 >= top ? rect.top - height - 8 : rect.bottom + 8, bottom - height - 8));
+    markInteraction();
+    dismissedRange.current = null;
+    setSelectionPreview({ source: { explorationId: id, messageId: message.id, sectionId: start.dataset.sectionId!, ...(end !== start ? { endSectionId: end.dataset.sectionId! } : {}), quote }, x, y });
     setNotice("");
-  };
+  }, [dismissSelectionPreview, markInteraction]);
+
+  useEffect(() => {
+    // Touch selection handles can settle after pointerup. Debounce their native
+    // selectionchange events without moving focus or attaching a quote yet.
+    const changed = () => {
+      if (selectionTimer.current) clearTimeout(selectionTimer.current);
+      selectionTimer.current = setTimeout(captureSelection, 120);
+    };
+    const outside = (event: globalThis.PointerEvent) => {
+      if (!selectionAction.current?.contains(event.target as Node)) dismissSelectionPreview();
+    };
+    document.addEventListener("selectionchange", changed);
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("scroll", dismissSelectionPreview, true);
+    window.addEventListener("resize", dismissSelectionPreview);
+    window.visualViewport?.addEventListener("resize", dismissSelectionPreview);
+    window.visualViewport?.addEventListener("scroll", dismissSelectionPreview);
+    return () => {
+      if (selectionTimer.current) clearTimeout(selectionTimer.current);
+      document.removeEventListener("selectionchange", changed);
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("scroll", dismissSelectionPreview, true);
+      window.removeEventListener("resize", dismissSelectionPreview);
+      window.visualViewport?.removeEventListener("resize", dismissSelectionPreview);
+      window.visualViewport?.removeEventListener("scroll", dismissSelectionPreview);
+    };
+  }, [captureSelection, dismissSelectionPreview]);
   const pointerUp = (event: PointerEvent<HTMLDivElement>) => {
     const wasDragging = pointers.current.has(event.pointerId);
     pointers.current.delete(event.pointerId); pinchDistance.current = 0; moving.current = null;
     if (!pointers.current.size) setDragging(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (!wasDragging) captureSelection();
+    if (!wasDragging) captureSelection(true);
   };
 
   const runRequest = async (task: Pending) => {
@@ -564,7 +646,7 @@ export default function ConversationSpace() {
       <p className="menu-caption">Include in next question · up to 8</p><div className="context-picker">{Object.values(space.explorations).filter((item) => item.id !== activeId).map((item) => <label key={item.id}><input type="checkbox" checked={includeIds.includes(item.id)} disabled={includeIds.length >= 8 && !includeIds.includes(item.id)} onChange={(event) => { markInteraction(); setIncludeIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id)); }} />{item.title}</label>)}</div>
     </aside>}
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
-    <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(); }}>
+    <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
       <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition}>
         {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
@@ -578,6 +660,7 @@ export default function ConversationSpace() {
       </SpatialWorld>
       {!started && <div className="welcome"><h1>What’s on your mind?</h1></div>}
     </div>
+    {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { chooseSection(selectionPreview.source); window.getSelection()?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
     {started && <SpaceMap nodes={nodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
