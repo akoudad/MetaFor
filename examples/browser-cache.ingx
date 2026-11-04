@@ -1,0 +1,206 @@
+{
+  "format": "ingx",
+  "version": 1,
+  "savedAt": "2026-11-04T21:05:30.151Z",
+  "conversation": {
+    "id": "space-d7ca26ed-d4b2-4b89-ad7f-68300d7c9635",
+    "title": "How browsers decide to use cached HTTP responses",
+    "kind": "live",
+    "rootId": "root",
+    "explorations": {
+      "root": {
+        "id": "root",
+        "title": "How browsers decide to use cached HTTP responses",
+        "summary": "Browsers reuse fresh cache directly, then use ETag revalidation with 304 responses when stale.",
+        "parentId": null,
+        "source": null,
+        "messages": [
+          {
+            "id": "question-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+            "role": "user",
+            "requestId": "smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+            "source": null,
+            "sections": [
+              {
+                "id": "prompt-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+                "title": "",
+                "body": "Explain how a browser decides whether to use a cached HTTP response. Cover freshness, Cache-Control, ETag revalidation, and one small example."
+              }
+            ]
+          },
+          {
+            "id": "answer-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+            "role": "assistant",
+            "requestId": "smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+            "source": null,
+            "routing": {
+              "decision": "continue",
+              "reason": "First answer in this empty topic, so it continues the main conversation."
+            },
+            "model": "muse-spark-1.3",
+            "context": {
+              "fullIds": [
+                "root"
+              ],
+              "summaryIds": [],
+              "truncated": false
+            },
+            "sections": [
+              {
+                "id": "section-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f-0",
+                "title": "1. Freshness and Cache-Control",
+                "body": "When no cached entry exists, the browser fetches from network. If an entry exists, it checks **freshness** first:\n\n- `Cache-Control: max-age=3600` means reuse without contacting server for 3600 seconds.\n- `Cache-Control: no-cache` means always revalidate with server first.\n- `Cache-Control: no-store` means do not store at all.\n- `Expires` is the older fallback if `max-age` is absent.\n\nFresh = use immediately. Stale = must revalidate or refetch."
+              },
+              {
+                "id": "section-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f-1",
+                "title": "2. ETag revalidation",
+                "body": "If cached response is stale but has validators, the browser sends a conditional request:\n\n- Server previously sent `ETag: \"abc123\"`\n- Browser sends `If-None-Match: \"abc123\"`\n- If content unchanged: server returns `304 Not Modified` with no body, browser reuses cache and updates freshness.\n- If changed: server returns `200 OK` with new body and new `ETag`.\n\n`Last-Modified` / `If-Modified-Since` works similarly, but `ETag` is more precise."
+              },
+              {
+                "id": "section-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f-2",
+                "title": "3. Small example",
+                "body": "1. First visit to `/logo.png`:\n```http\nHTTP/1.1 200 OK\nCache-Control: max-age=60\nETag: \"v1\"\n```\n2. Second visit after 10s: fresh because age < 60, use cache, no request.\n3. Visit after 70s: stale, so browser sends:\n```http\nGET /logo.png\nIf-None-Match: \"v1\"\n```\nServer replies `304 Not Modified` if unchanged, or `200 OK` with `ETag: \"v2\"` if updated."
+              }
+            ]
+          }
+        ],
+        "position": [
+          0,
+          0,
+          0
+        ]
+      },
+      "exploration-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81": {
+        "id": "exploration-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+        "title": "ETag validation and 304 responses in depth",
+        "summary": "Conditional request with If-None-Match returns 304 to reuse cache or 200 with new body and ETag when changed.",
+        "parentId": "root",
+        "source": {
+          "explorationId": "root",
+          "messageId": "answer-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+          "sectionId": "section-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f-1",
+          "quote": "Server previously sent ETag: \"abc123\""
+        },
+        "messages": [
+          {
+            "id": "question-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+            "role": "user",
+            "requestId": "smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+            "source": {
+              "explorationId": "root",
+              "messageId": "answer-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+              "sectionId": "section-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f-1",
+              "quote": "Server previously sent ETag: \"abc123\""
+            },
+            "sections": [
+              {
+                "id": "prompt-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+                "title": "",
+                "body": "Explore this selected idea in a separate, deeper topic: walk through ETag validation, 304 responses, and what changes when the resource changes. Include a tiny request/response example."
+              }
+            ]
+          },
+          {
+            "id": "answer-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+            "role": "assistant",
+            "requestId": "smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+            "source": {
+              "explorationId": "root",
+              "messageId": "answer-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f",
+              "sectionId": "section-smoke-f094a2f1-2b36-4614-84ae-dc8919ce878f-1",
+              "quote": "Server previously sent ETag: \"abc123\""
+            },
+            "routing": {
+              "decision": "branch",
+              "reason": "Separate deep dive on ETag validation keeps the overview clean."
+            },
+            "model": "muse-spark-1.3",
+            "context": {
+              "fullIds": [
+                "root"
+              ],
+              "summaryIds": [],
+              "truncated": false
+            },
+            "sections": [
+              {
+                "id": "section-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81-0",
+                "title": "1. ETag validation flow",
+                "body": "An `ETag` is an opaque validator the server assigns to a specific version of a resource:\n\n- First response includes `ETag: \"abc123\"`\n- Browser stores body + ETag together\n- When the cached entry becomes stale, the browser does not discard it immediately. It sends a **conditional request** with `If-None-Match: \"abc123\"`\n\nThis asks: \"Send the full body only if it no longer matches this version.\""
+              },
+              {
+                "id": "section-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81-1",
+                "title": "2. Unchanged resource: 304 Not Modified",
+                "body": "If the resource is unchanged, the server sends no body:\n\n```http\nHTTP/1.1 304 Not Modified\nCache-Control: max-age=60\nETag: \"abc123\"\n```\n\nMeaning:\n- Reuse your stored body\n- Reset the freshness clock using the new `Cache-Control` header\n- Saves bandwidth and is faster than a full 200\n\nA `304` must not contain a message-body, but may update cache metadata like `Cache-Control`, `ETag`, or `Expires`."
+              },
+              {
+                "id": "section-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81-2",
+                "title": "3. Changed resource: 200 with new ETag",
+                "body": "If bytes, version, or relevant metadata changed, the validator will not match:\n\n```http\nHTTP/1.1 200 OK\nCache-Control: max-age=60\nETag: \"def456\"\nContent-Length: 18432\n[binary body...]\n```\n\nThe browser must:\n1. Replace the cached body\n2. Replace old ETag `\"abc123\"` with `\"def456\"`\n3. Restart freshness from zero\n\nIn short: **304 = keep cache, 200 = replace cache.**\n\nTiny complete round-trip:\n```http\nGET /logo.png\nIf-None-Match: \"abc123\"\n```\nUnchanged → `304`, use cache. Changed → `200 + ETag: \"def456\"`, store new copy."
+              }
+            ]
+          },
+          {
+            "id": "question-smoke-4e2ab87c-9d52-4db7-b981-d61c8da86fdf",
+            "role": "user",
+            "requestId": "smoke-4e2ab87c-9d52-4db7-b981-d61c8da86fdf",
+            "source": null,
+            "sections": [
+              {
+                "id": "prompt-smoke-4e2ab87c-9d52-4db7-b981-d61c8da86fdf",
+                "title": "",
+                "body": "Quick clarification: does a 304 response normally include the full representation body? Answer in one short section."
+              }
+            ]
+          },
+          {
+            "id": "answer-smoke-4e2ab87c-9d52-4db7-b981-d61c8da86fdf",
+            "role": "assistant",
+            "requestId": "smoke-4e2ab87c-9d52-4db7-b981-d61c8da86fdf",
+            "source": null,
+            "routing": {
+              "decision": "continue",
+              "reason": "Short direct clarification fits the current topic."
+            },
+            "model": "muse-spark-1.3",
+            "context": {
+              "fullIds": [
+                "exploration-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+                "root"
+              ],
+              "summaryIds": [],
+              "truncated": false
+            },
+            "sections": [
+              {
+                "id": "section-smoke-4e2ab87c-9d52-4db7-b981-d61c8da86fdf-0",
+                "title": "304 has no body",
+                "body": "No. A `304 Not Modified` **must not contain the full representation body**.\n\nIt tells the browser: \"your cached copy is still good, reuse it.\" It may include headers that update cache metadata, such as `Cache-Control`, `ETag`, or `Expires`, but saves bandwidth by omitting the body."
+              }
+            ]
+          }
+        ],
+        "position": [
+          0,
+          -800,
+          -300
+        ]
+      }
+    },
+    "connections": []
+  },
+  "view": {
+    "activeId": "exploration-smoke-e688ec7b-17dd-4ba8-ad08-5332c3004a81",
+    "view": {
+      "x": -1250,
+      "y": 650,
+      "z": -401.6606984505985
+    },
+    "overview": false,
+    "started": true,
+    "places": {},
+    "history": [
+      "root"
+    ]
+  }
+}

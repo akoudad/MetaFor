@@ -1,0 +1,330 @@
+import type { Conversation, SourceReference } from "./model";
+import { CONVERSATION_LIMITS, validateConversation, validateSourceReference } from "./model";
+
+type Point = { x: number; y: number; z: number };
+
+export type Snapshot = {
+  format: "ingx";
+  version: 1;
+  savedAt: string;
+  conversation: Conversation;
+  view: {
+    activeId: string;
+    view: Point;
+    overview: boolean;
+    started: boolean;
+    places: Record<string, { view: Point; draft: string; selection: SourceReference | null; scrollTop: number }>;
+    history: string[];
+    positions?: Record<string, Point>;
+  };
+};
+
+export type SavedSpace = { id: string; title: string; savedAt: string };
+
+export const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+const DATABASE = "metaphore-spaces";
+const SNAPSHOTS = "snapshots";
+const LIBRARY = "library";
+const FALLBACK_PREFIX = "metaphore.ingx.v1:";
+const unsafeKeys = new Set(["__proto__", "prototype", "constructor"]);
+const pendingSaves = new Map<string, Promise<void>>();
+const fallbackWrites = new Map<string, { serialized: string; sequence: number }>();
+let writeSequence = 0;
+
+class InvalidSavedData extends Error {}
+
+function record(value: unknown, label: string, allowed?: string[]): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} must contain plain data.`);
+  for (const key of Object.keys(value)) {
+    if (unsafeKeys.has(key) || (allowed && !allowed.includes(key))) throw new Error(`${label} contains an unsupported property: ${key}.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function validDate(value: unknown): asserts value is string {
+  if (typeof value !== "string" || value.length > 40 || !/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(Date.parse(value))) {
+    throw new Error("The saved timestamp is invalid.");
+  }
+}
+
+function point(value: unknown, label: string) {
+  const data = record(value, label, ["x", "y", "z"]);
+  for (const axis of ["x", "y", "z"]) {
+    if (typeof data[axis] !== "number" || !Number.isFinite(data[axis]) || Math.abs(data[axis]) > CONVERSATION_LIMITS.coordinate) {
+      throw new Error(`${label} must have bounded finite coordinates.`);
+    }
+  }
+}
+
+function validateSnapshot(value: unknown): asserts value is Snapshot {
+  const snapshot = record(value, "File", ["format", "version", "savedAt", "conversation", "view"]);
+  if (snapshot.format !== "ingx") throw new Error("This is not an .ingx conversation file.");
+  if (snapshot.version !== 1) throw new Error("This .ingx version is not supported. Expected version 1.");
+  validDate(snapshot.savedAt);
+  validateConversation(snapshot.conversation);
+  const conversation = snapshot.conversation;
+  const view = record(snapshot.view, "Saved view", ["activeId", "view", "overview", "started", "places", "history", "positions"]);
+  const known = (id: unknown, label: string): id is string => {
+    if (typeof id !== "string" || !Object.hasOwn(conversation.explorations, id)) throw new Error(`${label} refers to a missing exploration.`);
+    return true;
+  };
+  known(view.activeId, "Active topic");
+  point(view.view, "Camera");
+  if (typeof view.overview !== "boolean" || typeof view.started !== "boolean") throw new Error("View flags must be true or false.");
+  if (!Array.isArray(view.history) || view.history.length > 1000) throw new Error("Navigation history must contain at most 1000 entries.");
+  for (const id of view.history) known(id, "Navigation history");
+  const places = record(view.places, "Saved places");
+  for (const [id, value] of Object.entries(places)) {
+    known(id, "Saved place");
+    const place = record(value, "Saved place", ["view", "draft", "selection", "scrollTop"]);
+    point(place.view, "Saved camera");
+    if (typeof place.draft !== "string" || place.draft.length > 16_000) throw new Error("A saved draft must contain at most 16,000 characters.");
+    if (typeof place.scrollTop !== "number" || !Number.isFinite(place.scrollTop) || place.scrollTop < 0 || place.scrollTop > CONVERSATION_LIMITS.coordinate) {
+      throw new Error("A saved reading position must be a bounded positive number.");
+    }
+    if (place.selection !== null) {
+      validateSourceReference(conversation, place.selection);
+      if (place.selection.explorationId !== id) throw new Error("A saved selection belongs to a different topic.");
+    }
+  }
+  if (view.positions !== undefined) {
+    for (const [id, position] of Object.entries(record(view.positions, "Topic positions"))) {
+      known(id, "Topic position");
+      point(position, "Topic position");
+    }
+  }
+}
+
+export function serializeSnapshot(snapshot: Snapshot): string {
+  validateSnapshot(snapshot);
+  const result = JSON.stringify(snapshot, null, 2);
+  if (new TextEncoder().encode(result).byteLength > MAX_SNAPSHOT_BYTES) throw new Error("This space exceeds the 2 MiB .ingx file limit.");
+  return result;
+}
+
+export function parseSnapshot(value: string): Snapshot {
+  if (typeof value !== "string") throw new Error("Choose a text .ingx conversation file.");
+  if (new TextEncoder().encode(value).byteLength > MAX_SNAPSHOT_BYTES) throw new Error("This file exceeds the 2 MiB .ingx file limit.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("This file is not valid JSON. Choose an intact .ingx export.");
+  }
+  validateSnapshot(parsed);
+  return parsed;
+}
+
+function metadata(value: unknown): SavedSpace {
+  const data = record(value, "Saved space", ["id", "title", "savedAt"]);
+  if (typeof data.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}$/.test(data.id) || unsafeKeys.has(data.id)) throw new Error("Saved space has an invalid ID.");
+  if (typeof data.title !== "string" || data.title.length > 500) throw new Error("Saved space has an invalid title.");
+  validDate(data.savedAt);
+  return { id: data.id, title: data.title, savedAt: data.savedAt };
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") { reject(new Error("IndexedDB is unavailable.")); return; }
+    let done = false;
+    const timeout = setTimeout(() => {
+      done = true;
+      reject(new Error("Local storage did not respond. Close another Metaphore tab and retry."));
+    }, 4000);
+    let request: IDBOpenDBRequest;
+    try { request = indexedDB.open(DATABASE, 1); }
+    catch { clearTimeout(timeout); reject(new Error("Could not open IndexedDB.")); return; }
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SNAPSHOTS)) db.createObjectStore(SNAPSHOTS);
+      if (!db.objectStoreNames.contains(LIBRARY)) db.createObjectStore(LIBRARY);
+    };
+    request.onerror = () => { clearTimeout(timeout); done = true; reject(new Error("Could not open IndexedDB.")); };
+    request.onsuccess = () => {
+      clearTimeout(timeout);
+      if (done) { request.result.close(); return; }
+      done = true;
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
+  });
+}
+
+function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new Error("Could not read the saved space."));
+  });
+}
+
+function fallbackStorage(): Storage {
+  try {
+    if (typeof localStorage !== "undefined") return localStorage;
+  } catch { /* Browser settings can block access to the storage property. */ }
+  throw new Error("Browser local storage is unavailable.");
+}
+
+function writeFallback(serialized: string, entry: SavedSpace, sequence: number) {
+  const storage = fallbackStorage();
+  const key = `${FALLBACK_PREFIX}${entry.id}`;
+  const previous = storage.getItem(key);
+  if (previous) {
+    const known = fallbackWrites.get(entry.id);
+    if (known?.serialized === previous && known.sequence > sequence) return;
+    try {
+      if (Date.parse(parseSnapshot(previous).savedAt) > Date.parse(entry.savedAt)) return;
+    } catch { /* A fresh validated snapshot can replace a damaged fallback copy. */ }
+  }
+  storage.setItem(key, serialized);
+  fallbackWrites.set(entry.id, { serialized, sequence });
+}
+
+function cleanFallback(serialized: string, entry: SavedSpace, sequence: number) {
+  const storage = fallbackStorage();
+  const key = `${FALLBACK_PREFIX}${entry.id}`;
+  const current = storage.getItem(key);
+  if (!current) return;
+  const known = fallbackWrites.get(entry.id);
+  if (known?.serialized === current && known.sequence > sequence) return;
+  const savedAt = Date.parse(parseSnapshot(current).savedAt);
+  if (current === serialized || savedAt < Date.parse(entry.savedAt) || (savedAt === Date.parse(entry.savedAt) && known?.serialized === current && known.sequence <= sequence)) {
+    storage.removeItem(key);
+    if (fallbackWrites.get(entry.id)?.serialized === current) fallbackWrites.delete(entry.id);
+  }
+}
+
+function parseSaved(value: unknown): Snapshot | null {
+  if (value === undefined || value === null) return null;
+  try {
+    if (typeof value !== "string") throw new Error("The saved record is not text.");
+    return parseSnapshot(value);
+  } catch (error) {
+    throw new InvalidSavedData(`A saved space could not be read: ${error instanceof Error ? error.message : "Invalid data."}`);
+  }
+}
+
+async function indexedLibrary(): Promise<SavedSpace[]> {
+  const db = await openDatabase();
+  try {
+    const values = await requestResult(db.transaction(LIBRARY, "readonly").objectStore(LIBRARY).getAll());
+    try { return values.map(metadata); }
+    catch { throw new InvalidSavedData("The saved-space index contains invalid data."); }
+  } finally { db.close(); }
+}
+
+function fallbackLibrary(): SavedSpace[] {
+  const storage = fallbackStorage();
+  const result: SavedSpace[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key?.startsWith(FALLBACK_PREFIX)) continue;
+    const snapshot = parseSaved(storage.getItem(key));
+    if (snapshot) result.push({ id: snapshot.conversation.id, title: snapshot.conversation.title, savedAt: snapshot.savedAt });
+  }
+  return result;
+}
+
+export async function listSnapshots(): Promise<SavedSpace[]> {
+  const results = await Promise.allSettled([indexedLibrary(), Promise.resolve().then(fallbackLibrary)]);
+  const merged = new Map<string, SavedSpace>();
+  let available = false;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      if (result.reason instanceof InvalidSavedData) throw result.reason;
+      continue;
+    }
+    available = true;
+    for (const saved of result.value) {
+      const previous = merged.get(saved.id);
+      if (!previous || Date.parse(saved.savedAt) >= Date.parse(previous.savedAt)) merged.set(saved.id, saved);
+    }
+  }
+  if (!available) throw new Error("Local storage is unavailable. You can keep working and export an .ingx copy.");
+  return [...merged.values()].sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt));
+}
+
+export async function loadSnapshot(id?: string): Promise<Snapshot | null> {
+  const selected = id ?? (await listSnapshots())[0]?.id;
+  if (!selected) return null;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}$/.test(selected) || unsafeKeys.has(selected)) throw new Error("The saved-space ID is invalid.");
+  const fromIndexed = async () => {
+    const db = await openDatabase();
+    try {
+      const value = await requestResult(db.transaction(SNAPSHOTS, "readonly").objectStore(SNAPSHOTS).get(selected));
+      return parseSaved(value);
+    } finally { db.close(); }
+  };
+  const results = await Promise.allSettled([
+    fromIndexed(),
+    Promise.resolve().then(() => parseSaved(fallbackStorage().getItem(`${FALLBACK_PREFIX}${selected}`))),
+  ]);
+  const candidates: Snapshot[] = [];
+  let available = false;
+  let invalid: Error | null = null;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      if (result.reason instanceof InvalidSavedData) invalid = result.reason;
+      continue;
+    }
+    available = true;
+    if (result.value) {
+      if (result.value.conversation.id !== selected) throw new Error("The saved-space record has a mismatched ID.");
+      candidates.push(result.value);
+    }
+  }
+  // Prefer the emergency copy on an equal timestamp; it may be newer than an
+  // IndexedDB write that was already in flight when the page was hidden.
+  if (candidates.length) return candidates.reverse().sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt))[0];
+  if (invalid) throw invalid;
+  if (!available) throw new Error("Could not open local storage. Your exported .ingx files can still be imported.");
+  return null;
+}
+
+async function writeSnapshot(serialized: string, entry: SavedSpace, sequence: number): Promise<void> {
+  try {
+    const db = await openDatabase();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction([SNAPSHOTS, LIBRARY], "readwrite");
+        transaction.objectStore(SNAPSHOTS).put(serialized, entry.id);
+        transaction.objectStore(LIBRARY).put(entry, entry.id);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(new Error("Could not save the space."));
+        transaction.onabort = () => reject(new Error("Saving the space was interrupted."));
+      });
+    } finally { db.close(); }
+    try { cleanFallback(serialized, entry, sequence); } catch { /* IndexedDB already holds the saved copy. */ }
+    return;
+  } catch {
+    try {
+      writeFallback(serialized, entry, sequence);
+    } catch {
+      throw new Error("Could not save this space locally. Browser storage may be full or blocked; export an .ingx copy before closing.");
+    }
+  }
+}
+
+export async function saveSnapshot(snapshot: Snapshot): Promise<void> {
+  const serialized = serializeSnapshot(snapshot);
+  const entry: SavedSpace = { id: snapshot.conversation.id, title: snapshot.conversation.title, savedAt: snapshot.savedAt };
+  const sequence = ++writeSequence;
+  const previous = pendingSaves.get(entry.id) ?? Promise.resolve();
+  const pending = previous.catch(() => undefined).then(() => writeSnapshot(serialized, entry, sequence));
+  pendingSaves.set(entry.id, pending);
+  try { await pending; }
+  finally {
+    if (pendingSaves.get(entry.id) === pending) pendingSaves.delete(entry.id);
+  }
+}
+
+export function backupSnapshot(snapshot: Snapshot): void {
+  const serialized = serializeSnapshot(snapshot);
+  const entry: SavedSpace = { id: snapshot.conversation.id, title: snapshot.conversation.title, savedAt: snapshot.savedAt };
+  try {
+    writeFallback(serialized, entry, ++writeSequence);
+  } catch {
+    throw new Error("Could not back up this space before leaving. Browser storage may be full or blocked; export an .ingx copy.");
+  }
+}
