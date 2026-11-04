@@ -16,11 +16,14 @@ ask about it, explore the detail, and return to the original answer.
 - **Explore a passage.** Select text in any answer. Its exact source stays attached
   to the new discussion.
 - **Move between levels.** Zoom from the overview into a topic. Scroll inside it
-  to read; use the navigation rail or source link to return.
+  to read; use the mini-map, navigation rail, or source link to return.
 - **Arrange your space.** Drag topics into place. Reset layout restores their
   automatic arrangement without changing the conversation.
 - **Come back later.** Chats save locally and remain available under Saved chats.
   Export an `.ingx` file to keep the text, connections, and view state together.
+
+New topics emerge from their source before the camera moves into the answer.
+You can interrupt that movement by navigating or typing.
 
 ## How Meta AI is used
 

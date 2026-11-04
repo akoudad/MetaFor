@@ -3,6 +3,14 @@ import { CONVERSATION_LIMITS, validateConversation, validateSourceReference } fr
 
 type Point = { x: number; y: number; z: number };
 
+export type PendingQuestion = {
+  requestId: string;
+  activeId: string;
+  question: string;
+  selection: SourceReference | null;
+  includeIds: string[];
+};
+
 export type Snapshot = {
   format: "ingx";
   version: 1;
@@ -16,6 +24,7 @@ export type Snapshot = {
     places: Record<string, { view: Point; draft: string; selection: SourceReference | null; scrollTop: number }>;
     history: string[];
     positions?: Record<string, Point>;
+    pending?: PendingQuestion;
   };
 };
 
@@ -65,7 +74,7 @@ function validateSnapshot(value: unknown): asserts value is Snapshot {
   validDate(snapshot.savedAt);
   validateConversation(snapshot.conversation);
   const conversation = snapshot.conversation;
-  const view = record(snapshot.view, "Saved view", ["activeId", "view", "overview", "started", "places", "history", "positions"]);
+  const view = record(snapshot.view, "Saved view", ["activeId", "view", "overview", "started", "places", "history", "positions", "pending"]);
   const known = (id: unknown, label: string): id is string => {
     if (typeof id !== "string" || !Object.hasOwn(conversation.explorations, id)) throw new Error(`${label} refers to a missing exploration.`);
     return true;
@@ -94,6 +103,21 @@ function validateSnapshot(value: unknown): asserts value is Snapshot {
       known(id, "Topic position");
       point(position, "Topic position");
     }
+  }
+  if (view.pending !== undefined) {
+    const pending = record(view.pending, "Unfinished question", ["requestId", "activeId", "question", "selection", "includeIds"]);
+    if (typeof pending.requestId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,99}$/.test(pending.requestId) || unsafeKeys.has(pending.requestId)) throw new Error("The unfinished question has an invalid request ID.");
+    known(pending.activeId, "Unfinished question");
+    if (typeof pending.question !== "string" || !pending.question.trim() || pending.question.length > 8000) throw new Error("An unfinished question must contain 1–8,000 characters.");
+    if (pending.selection !== null) {
+      validateSourceReference(conversation, pending.selection);
+      if (pending.selection.explorationId !== pending.activeId) throw new Error("The unfinished question's selection belongs to a different topic.");
+    }
+    if (!Array.isArray(pending.includeIds) || pending.includeIds.length > 8) throw new Error("An unfinished question can include at most eight topics.");
+    for (const id of pending.includeIds) known(id, "Unfinished question context");
+    if (new Set(pending.includeIds).size !== pending.includeIds.length) throw new Error("The unfinished question has duplicate context topics.");
+    if (Object.values(conversation.explorations).some((item) => item.messages.some((message) => message.role === "assistant" && message.requestId === pending.requestId))) throw new Error("The unfinished question already has an answer.");
+    if (!view.started) throw new Error("An unfinished question must belong to a started chat.");
   }
 }
 

@@ -19,6 +19,7 @@ type TopicCardProps = {
   onSource: (source: SourceReference) => void;
   onRetry: () => void;
   onCancel: () => void;
+  onDismiss: () => void;
 };
 
 export default function TopicCard(props: TopicCardProps) {
@@ -79,7 +80,7 @@ export default function TopicCard(props: TopicCardProps) {
       </div>)}
       {props.pendingQuestion && <div className="pending-answer" role="status">
         <p className="original-question">{props.pendingQuestion}</p>
-        {props.pendingError ? <><p>{props.pendingError}</p><button onClick={props.onRetry}>Retry</button><button onClick={props.onCancel}>Dismiss</button></> : <><p className="thinking">Working on your question<span>…</span></p><button onClick={props.onCancel}>Stop</button></>}
+        {props.pendingError ? <><p>{props.pendingError}</p><button onClick={props.onRetry}>Retry</button><button onClick={props.onDismiss}>Dismiss</button></> : <><p className="thinking">Working on your question<span>…</span></p><button onClick={props.onCancel}>Stop</button></>}
       </div>}
       {!item.messages.length && !props.pendingQuestion && <p className="empty-topic">Ask your first question below.</p>}
     </div>

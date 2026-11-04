@@ -190,3 +190,36 @@ test("a failed IndexedDB save cannot overwrite a newer emergency fallback", asyn
     if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");
   }
 });
+
+test(".ingx preserves an unfinished question separately from the next draft", () => {
+  const snapshot = fixture();
+  snapshot.view.pending = { requestId: "pending-roof", activeId: "job-search", question: "Explain this shortlist", selection: snapshot.view.places["job-search"].selection, includeIds: ["compensation"] };
+  snapshot.view.places["job-search"].draft = "My next question is different";
+  const restored = parseSnapshot(serializeSnapshot(snapshot));
+  assert.deepEqual(restored.view.pending, snapshot.view.pending);
+  assert.equal(restored.view.places["job-search"].draft, "My next question is different");
+});
+
+test("unfinished-question imports reject malformed references, completed requests, and extra secrets", () => {
+  const snapshot = fixture();
+  snapshot.view.pending = { requestId: "pending-roof", activeId: "job-search", question: "Explain this shortlist", selection: snapshot.view.places["job-search"].selection, includeIds: ["compensation"] };
+  const invalid: unknown[] = [
+    null, {},
+    { ...snapshot.view.pending, requestId: "__proto__" },
+    { ...snapshot.view.pending, activeId: "missing" },
+    { ...snapshot.view.pending, activeId: "compensation" },
+    { ...snapshot.view.pending, question: " " },
+    { ...snapshot.view.pending, question: "x".repeat(8001) },
+    { ...snapshot.view.pending, selection: { ...snapshot.view.pending.selection, quote: "invented quote" } },
+    { ...snapshot.view.pending, includeIds: ["missing"] },
+    { ...snapshot.view.pending, includeIds: ["compensation", "compensation"] },
+    { ...snapshot.view.pending, accessCode: "do-not-save" },
+    { ...snapshot.view.pending, conversation: snapshot.conversation },
+  ];
+  for (const pending of invalid) {
+    assert.throws(() => parseSnapshot(JSON.stringify({ ...snapshot, view: { ...snapshot.view, pending } })), (error) => error instanceof Error && !(error instanceof TypeError));
+  }
+  const completed = structuredClone(snapshot);
+  completed.conversation.explorations["job-search"].messages.find((message) => message.role === "assistant")!.requestId = "pending-roof";
+  assert.throws(() => serializeSnapshot(completed), /already has an answer/);
+});

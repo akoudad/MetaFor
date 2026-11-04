@@ -11,17 +11,20 @@ Local release candidate · 2026-11-04
 - [x] Keep a returning answer attached to its original question without stealing focus.
 - [x] Truthful source arrows, optional related topics, manual placement, and Reset layout.
 - [x] Empty start, visible New chat / Saved chats, and preserved unfinished drafts.
+- [x] Clear submitted input immediately; retain pending questions separately for retry.
 - [x] Saved-conversation library, reload recovery, and validated `.ingx` import/export.
 - [x] Preserve existing work when a request, save, or import fails.
 - [x] Long-answer outline and keyboard navigation through a crowded space.
-- [x] Varied stars with gentle drift and occasional faint shooting stars.
+- [x] Source-to-detail arrival motion and a navigable isometric mini-map.
+- [x] Varied drifting stars, a faint galaxy, restrained meteors, a glowing orb, and star cursor.
 - [x] Setup, deployment instructions, example file, and a short demo script.
 
 ## Verification
 
-- 80 automated tests pass, including 20 integrated React DOM tests.
+- 100 automated tests pass, including 27 integrated conversation UI tests and
+  three mini-map/scene DOM tests.
 - Type checking and the production build pass.
-- Three real `muse-spark-1.3` calls on the revised build verified the first answer,
+- Three real `muse-spark-1.3` calls during backend verification covered the first answer,
   deeper selected topic, and short clarification with automatic placement
   throughout. Parent content and exact quotes survived.
 - The live conversation passed `.ingx` serialization/import. An example is in
@@ -36,6 +39,10 @@ Local release candidate · 2026-11-04
 - A manual-frame DOM check verified idle canvas animation leaves cards and links
   unchanged, pauses in hidden tabs, respects reduced motion, and cleans up on
   unmount. It does not measure real-browser rendering performance.
+- Arrival tests cover source/child framing, exact final position, interruption,
+  reduced motion, and cleanup. Mini-map tests cover large/extreme layouts and
+  keyboard navigation. Pending-question tests cover Stop, retry, Dismiss, reload
+  without automatic sending, and preservation of a separately typed next draft.
 
 ## Remaining release checks
 

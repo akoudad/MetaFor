@@ -22,12 +22,14 @@ if you use it.
 3. **0:55–1:30 · Explore.** Highlight the sentence about ETag. Ask: “Walk me
    through ETag validation in depth, with a request and a 304 response.”
    “The model places the follow-up automatically; the app keeps the exact passage
-   it came from.” Show the actual placement rather than claiming a fixed outcome.
+   it came from.” If a new topic opens, let the source-to-detail movement finish
+   and point out the new shape in the mini-map. Show the actual placement rather
+   than claiming a fixed outcome.
 4. **1:30–1:55 · Clarify and return.** Ask: “Does a 304 response include the full
    representation body? Keep it brief.” Use the parent breadcrumb or source link.
    “A short clarification can stay in its topic; the original answer is intact.”
 5. **1:55–2:20 · Arrange.** Pull back with the wheel over empty
-   space, then focus the branch again. Point out the source arrow and preserved
+   space, then use the mini-map to focus the topic again. Point out the source arrow and preserved
    original answer. Drag the topic handle, then use `⋯` → **Reset layout**.
    “Position and meaning are separate. I can arrange the space without changing
    the discussion.”

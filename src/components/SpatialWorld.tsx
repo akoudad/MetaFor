@@ -4,6 +4,8 @@ import { useId, useLayoutEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { PerspectiveCamera, Vector3 } from "three";
 import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, connectionEndpoints, detailForScale } from "@/lib/spatial";
+import { createBranchScene, sampleBranchScene } from "@/lib/scene";
+import type { BranchScene } from "@/lib/scene";
 
 export type WorldPoint = { x: number; y: number; z: number };
 export type SpatialNode = { id: string; position: WorldPoint };
@@ -14,6 +16,7 @@ export type SpatialLink = {
   status?: "suggested" | "accepted";
   reason?: string;
 };
+export type SpatialTransition = { key: string; fromId: string; toId: string; follow: boolean };
 
 type SpatialWorldProps = {
   nodes: SpatialNode[];
@@ -21,6 +24,7 @@ type SpatialWorldProps = {
   activeId?: string;
   view: WorldPoint;
   reducedMotion: boolean;
+  transition?: SpatialTransition | null;
   onViewChange?: (view: WorldPoint) => void;
   children: (node: SpatialNode) => ReactNode;
 };
@@ -40,21 +44,59 @@ function createStars() {
     return seed / 2147483647;
   };
 
-  return Array.from({ length: 520 }, () => {
-    const prominent = random() < 0.08;
+  return Array.from({ length: 900 }, () => {
+    const brightness = random();
+    const prominent = brightness > 0.965;
+    const medium = brightness > 0.82;
     return {
       x: (random() - 0.5) * STAR_VOLUME.x,
       y: (random() - 0.5) * STAR_VOLUME.y,
       z: -random() * STAR_VOLUME.z,
-      size: prominent ? 38 + random() * 24 : 12 + random() * 14,
-      opacity: prominent ? 0.58 + random() * 0.24 : 0.24 + random() * 0.24,
-      minRadius: prominent ? 0.9 : 0.45,
-      maxRadius: prominent ? 2 : 1.15,
+      size: prominent ? 32 + random() * 22 : medium ? 14 + random() * 12 : 4 + random() * 10,
+      opacity: prominent ? 0.65 + random() * 0.25 : medium ? 0.35 + random() * 0.23 : 0.12 + random() * 0.3,
+      minRadius: prominent ? 0.75 : medium ? 0.4 : 0.22,
+      maxRadius: prominent ? 1.8 : medium ? 1.1 : 0.65,
+      twinkle: prominent ? 0.08 : 0.035,
+      phase: random() * Math.PI * 2,
+      period: 4 + random() * 7,
     };
   });
 }
 
 const STARS = createStars();
+
+/** Cache a distant, neutral galaxy once; ambient frames only composite it. */
+function createGalaxy(): HTMLCanvasElement | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 320;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  let seed = 94031;
+  const random = () => { seed = (seed * 48271) % 2147483647; return seed / 2147483647; };
+  context.save();
+  context.translate(320, 160);
+  context.scale(1, 0.28);
+  const haze = context.createRadialGradient(0, 0, 2, 0, 0, 290);
+  haze.addColorStop(0, "rgba(225, 225, 225, 0.045)");
+  haze.addColorStop(0.25, "rgba(210, 210, 210, 0.025)");
+  haze.addColorStop(1, "rgba(210, 210, 210, 0)");
+  context.fillStyle = haze;
+  context.fillRect(-300, -300, 600, 600);
+  context.restore();
+  for (let index = 0; index < 850; index++) {
+    const bulge = index < 240;
+    const radius = bulge ? Math.pow(random(), 1.5) * 0.24 : Math.sqrt(random()) * 0.93;
+    const angle = bulge ? random() * Math.PI * 2 : (index % 2) * Math.PI + radius * 5 + (random() - 0.5) * 0.7;
+    const x = 320 + Math.cos(angle) * radius * 285;
+    const y = 160 + Math.sin(angle) * radius * 78 + (random() - 0.5) * 7;
+    context.fillStyle = `rgba(225, 225, 225, ${0.035 + random() * 0.11})`;
+    context.beginPath();
+    context.arc(x, y, 0.25 + random() * 0.55, 0, Math.PI * 2);
+    context.fill();
+  }
+  return canvas;
+}
 
 function wrap(value: number, span: number) {
   return ((value % span) + span) % span;
@@ -94,8 +136,10 @@ export default function SpatialWorld(props: SpatialWorldProps) {
     // Valid saved coordinates can be much farther apart than a small sample.
     const camera = new PerspectiveCamera(FIELD_OF_VIEW, 1, 1, 30_000_000);
     let starsContext: CanvasRenderingContext2D | null = null;
+    let galaxy: HTMLCanvasElement | null = null;
     try {
       starsContext = starsRef.current?.getContext("2d") ?? null;
+      if (starsContext) galaxy = createGalaxy();
     } catch (error) {
       console.warn("Starfield unavailable; keeping the conversation view.", error);
     }
@@ -113,12 +157,16 @@ export default function SpatialWorld(props: SpatialWorldProps) {
     let previousTime = 0;
     let previousAmbientTime = 0;
     let ambientSeconds = 0;
+    let knownNodeIds = new Set(latest.current.nodes.map((node) => node.id));
+    let handledTransition = latest.current.transition?.key;
+    let blockedView: WorldPoint | null = null;
+    let branch: { trigger: SpatialTransition; scene: BranchScene; elapsed: number; target: WorldPoint; viewInput: WorldPoint } | null = null;
     let shootingSeed = 24083;
     const randomShooting = () => {
       shootingSeed = (shootingSeed * 48271) % 2147483647;
       return shootingSeed / 2147483647;
     };
-    let nextShootingAt = 20 + randomShooting() * 20;
+    let nextShootingAt = 12 + randomShooting() * 12;
     let shooting: { started: number; x: number; y: number; dx: number; dy: number } | null = null;
     let disposed = false;
 
@@ -130,6 +178,17 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         const phase = latest.current.reducedMotion ? 0 : ambientSeconds;
         const driftX = Math.sin(phase / 75) * 120;
         const driftY = Math.sin(phase / 105) * 100;
+        if (galaxy) {
+          const span = Math.min(410, Math.max(220, width * 0.32));
+          const x = width * 0.82 - Math.sin(currentView.x / 24_000) * 14 + driftX * 0.012;
+          const y = height * 0.18 + Math.sin(currentView.y / 24_000) * 9 - driftY * 0.008;
+          starsContext.save();
+          starsContext.translate(x, y);
+          starsContext.rotate(-0.32);
+          starsContext.globalAlpha = 0.8;
+          starsContext.drawImage(galaxy, -span / 2, -span / 4, span, span / 2);
+          starsContext.restore();
+        }
         // Repeating world-space copies wrap beyond the viewport. Near/far fades
         // keep depth travel continuous without allowing near-plane point blobs.
         const tangent = Math.tan(FIELD_OF_VIEW * Math.PI / 360);
@@ -152,7 +211,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
 
           const fade = Math.min(1, (distance - 900) / 2500, (far - distance) / 4000);
           const radius = Math.min(star.maxRadius, Math.max(star.minRadius, star.size * focalLength / distance));
-          starsContext.fillStyle = `rgba(220, 220, 220, ${star.opacity * fade})`;
+          const twinkle = 1 + Math.sin(phase * Math.PI * 2 / star.period + star.phase) * star.twinkle;
+          starsContext.fillStyle = `rgba(225, 225, 225, ${star.opacity * fade * twinkle})`;
           starsContext.beginPath();
           starsContext.arc(screenX, screenY, radius, 0, Math.PI * 2);
           starsContext.fill();
@@ -201,7 +261,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
             dx: left ? 0.94 : -0.94,
             dy: top ? -0.34 : 0.34,
           };
-          nextShootingAt = ambientSeconds + 20 + randomShooting() * 20;
+          nextShootingAt = ambientSeconds + 12 + randomShooting() * 12;
         }
         // Navigation already redraws the canvas with the moving camera.
         // Idle frames only touch the canvas, never HTML nodes or SVG links.
@@ -222,7 +282,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         previousAmbientTime = 0;
         shooting = null;
         if (latest.current.reducedMotion) ambientSeconds = 0;
-        nextShootingAt = ambientSeconds + 20 + randomShooting() * 20;
+        nextShootingAt = ambientSeconds + 12 + randomShooting() * 12;
       }
     };
 
@@ -230,13 +290,47 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       frame = null;
       if (disposed || document.visibilityState === "hidden") return;
 
-      const { nodes, links, view, reducedMotion, activeId } = latest.current;
-      const target = finitePoint(view, DEFAULT_VIEW);
-      targetView.set(target.x, target.y, target.z);
+      const { nodes, links, view, reducedMotion, activeId, transition } = latest.current;
+      const requested = finitePoint(view, DEFAULT_VIEW);
       const delta = previousTime ? Math.min((time - previousTime) / 1000, 0.05) : 1 / 60;
       previousTime = time;
 
-      if (reducedMotion || currentView.distanceToSquared(targetView) < 0.01) {
+      if (branch && (
+        reducedMotion || transition?.key !== branch.trigger.key || transition.follow !== branch.trigger.follow ||
+        view !== branch.viewInput || !nodes.some((node) => node.id === branch!.trigger.toId) ||
+        requested.x !== branch.target.x || requested.y !== branch.target.y || requested.z !== branch.target.z
+      )) {
+        // Clearing a transition with no replacement camera target means stop,
+        // not "continue easing to its old final destination".
+        blockedView = !reducedMotion && view === branch.viewInput ? view : null;
+        branch = null;
+      }
+      if (blockedView !== view || reducedMotion) blockedView = null;
+      if (transition && transition.key !== handledTransition) {
+        handledTransition = transition.key;
+        const source = nodes.find((node) => node.id === transition.fromId);
+        const destination = nodes.find((node) => node.id === transition.toId);
+        if (!reducedMotion && source && destination && !knownNodeIds.has(destination.id)) {
+          branch = {
+            trigger: { ...transition }, elapsed: 0, target: requested, viewInput: view,
+            scene: createBranchScene(source.position, destination.position,
+              { x: currentView.x, y: currentView.y, z: currentView.z }, requested, width, height),
+          };
+          blockedView = null;
+        }
+      }
+      knownNodeIds = new Set(nodes.map((node) => node.id));
+      const target = blockedView ? currentView : requested;
+      targetView.set(target.x, target.y, target.z);
+      let reveal: ReturnType<typeof sampleBranchScene> | null = null;
+      if (branch) {
+        branch.elapsed += delta * 1000;
+        reveal = sampleBranchScene(branch.scene, branch.elapsed);
+      }
+
+      if (branch?.trigger.follow && reveal) {
+        currentView.set(reveal.view.x, reveal.view.y, reveal.view.z);
+      } else if (reducedMotion || currentView.distanceToSquared(targetView) < 0.01) {
         currentView.copy(targetView);
       } else {
         currentView.lerp(targetView, 1 - Math.exp(-9 * delta));
@@ -254,7 +348,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         const element = nodeElements.current.get(node.id);
         if (!element) continue;
 
-        const { x, y, z } = node.position;
+        const entering = Boolean(branch && reveal && node.id === branch.trigger.toId);
+        const { x, y, z } = entering ? reveal!.position : node.position;
         const distance = currentView.z - z;
         const visible =
           width > 0 && height > 0 &&
@@ -273,8 +368,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         projected.set(x, y, z).project(camera);
         const screenX = (projected.x + 1) * width / 2;
         const screenY = (1 - projected.y) * height / 2;
-        const scale = focalLength / distance;
-        const opacity = Math.min(1, (MAX_PROJECTED_SCALE - scale) / (MAX_PROJECTED_SCALE - FADE_START_SCALE));
+        const scale = focalLength / distance * (entering ? reveal!.scale : 1);
+        const opacity = Math.min(1, (MAX_PROJECTED_SCALE - scale) / (MAX_PROJECTED_SCALE - FADE_START_SCALE)) * (entering ? reveal!.opacity : 1);
         const halfWidth = CARD_WIDTH * scale / 2;
         const halfHeight = CARD_HEIGHT * scale / 2;
         const onScreen =
@@ -285,8 +380,9 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         // Preserve mounted content and scroll positions while the camera passes
         // a card's plane, without creating an enormous compositor layer.
         element.style.opacity = String(opacity);
-        element.inert = !onScreen;
-        if (onScreen) element.removeAttribute("aria-hidden");
+        const interactive = onScreen && (!entering || reveal!.done);
+        element.inert = !interactive;
+        if (interactive) element.removeAttribute("aria-hidden");
         else element.setAttribute("aria-hidden", "true");
 
         element.style.left = `${screenX}px`;
@@ -333,13 +429,16 @@ export default function SpatialWorld(props: SpatialWorldProps) {
 
         line.setAttribute("x1", String(endpoints.start.x));
         line.setAttribute("y1", String(endpoints.start.y));
-        line.setAttribute("x2", String(endpoints.end.x));
-        line.setAttribute("y2", String(endpoints.end.y));
+        const edgeProgress = branch && reveal && link.from === branch.trigger.fromId && link.to === branch.trigger.toId && !related
+          ? reveal.edgeProgress : 1;
+        line.setAttribute("x2", String(endpoints.start.x + (endpoints.end.x - endpoints.start.x) * edgeProgress));
+        line.setAttribute("y2", String(endpoints.start.y + (endpoints.end.y - endpoints.start.y) * edgeProgress));
         line.setAttribute("opacity", String(opacity * Math.min(from.opacity, to.opacity)));
         line.setAttribute("stroke-width", emphasized ? "1.35" : "1");
       }
 
-      if (currentView.distanceToSquared(targetView) > 0.01) {
+      if (reveal?.done) branch = null;
+      if (branch || currentView.distanceToSquared(targetView) > 0.01) {
         frame = requestAnimationFrame(render);
       }
     };

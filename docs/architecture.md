@@ -7,14 +7,25 @@ for the Meta Model API. A Three.js `PerspectiveCamera` projects HTML topics and
 SVG connections. Text remains selectable and scrolls natively; there is no WebGL
 background. A 2D canvas draws stars through the same camera.
 
-The starfield drifts slowly at different depths, with a faint shooting star every
-20–40 visible seconds. Ambient redraws are capped at 30 fps and only update the
-canvas; text and connections stay still. Hidden tabs pause animation, and reduced
-motion disables ambient movement.
+The starfield has varied sizes and brightness, slow depth drift, slight twinkle,
+a cached faint galaxy, and a shooting star every 12–24 visible seconds. Ambient
+redraws are capped at 30 fps and only update the canvas; text and connections stay
+still. Hidden tabs pause animation, and reduced motion disables ambient movement.
 
 Topics remain mounted while the camera moves. Projected scale selects titles,
 summaries, or full answers. The app owns layout, draggable positions, source
 arrows, the navigation rail, and section outlines.
+
+A new-topic event triggers a 1.2-second source-to-detail transition: pull back,
+reveal the child and connection, then enter the answer. It does not replay when
+loading a saved conversation or continuing an existing topic. User navigation,
+typing, or selection interrupts it. Answers arriving after another interaction
+can reveal their new node without taking over the camera. Reduced motion snaps
+to the destination; hidden tabs pause the timeline without catching up on return.
+
+The mini-map projects actual topic coordinates isometrically and supports pointer
+and keyboard navigation. Its diamond marks the camera destination, not a live
+camera position. This keeps ambient and camera frames out of React state updates.
 
 Automatic positions use stable horizontal lanes within depth rows. Spacing
 accounts for perspective to keep fitted overviews from overlapping cards.
@@ -45,7 +56,7 @@ The current model is nested JSON, not a separate database table for every record
 | Section | Stable ID, heading, original Markdown body. |
 | Source reference | Exploration, message, starting section, optional ending section and selected quote. |
 | Related connection | Two topic IDs, reason, suggested/accepted status. |
-| View | Active topic, camera, overview, history, dragged positions, per-topic draft, selection, and scroll position. |
+| View | Active topic, camera, overview, history, dragged positions, per-topic draft, selection, scroll position, and optional unfinished question. |
 
 Navigation parents form a tree; separate related connections may contain cycles.
 Source selections must match rendered text within one assistant message, including
@@ -54,7 +65,9 @@ selections across its sections. App-assigned IDs preserve existing answer text.
 ## Answer flow
 
 1. Capture the question, target, selection, placement mode, and explicitly included
-   topics under a request ID. Navigation does not change that target.
+   topics under a request ID. Clear the input immediately and show the submitted
+   question in its topic's pending card. A newly typed draft stays separate.
+   Navigation does not change the captured target.
 2. Validate the request on the server. Preserve the current selection and original
    question. Reserve up to 20,000 characters for at most 12 genuine source
    anchors, nearest topic first, before adding recent message excerpts and other
@@ -88,6 +101,14 @@ not implemented.
 2 MiB size limit, allowed fields, counts, text limits, finite coordinates, unique
 IDs, references, quotes, and parent cycles. Imported spaces receive a new
 conversation ID, preserving the existing library. Credentials are not exported.
+
+Optional `view.pending` records the request ID, target topic, question, selected
+passage, and included topic IDs. It does not duplicate the conversation or store
+credentials. Reloading or importing restores it as paused; sending requires an
+explicit retry. Stop preserves it, while Dismiss removes it without changing the
+next draft. A completed request ID cannot also appear as pending. Files without
+this optional field still load; older strict readers may reject files containing
+it.
 
 IndexedDB stores snapshots by conversation ID. A synchronous localStorage backup
 protects recent state when the page is hidden or closed and provides a fallback

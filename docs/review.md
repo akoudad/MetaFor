@@ -11,6 +11,9 @@
 | An unselected topic change pointed to the previous answer's last section. | Keep its parent connection with no passage source. | Session and UI tests verify there is no invented quote or section link. |
 | Corrections never updated the topic's initial summary. | Refresh the validated cumulative summary on continuation; keep the topic title stable. | Session tests verify updated summaries without rewriting existing answer text. |
 | Routing controls exposed implementation decisions in the main interaction. | The interface always requests automatic placement. | UI tests cover both outcomes without a mode selector; three live Meta requests produced an initial answer, deeper topic, then same-topic clarification. |
+| The sent question remained in the composer while its answer was pending. | Clear the input on submission; store the unfinished request separately from the next draft. | UI tests cover immediate clearing, identical next drafts, failed and stopped requests, retry, and reload without automatic sending. |
+| New topics appeared without showing their relationship to the source. | Reveal the source, child, and connection before moving into the answer; show the wider shape in a navigable mini-map. | Geometry tests cover the transition and map; manual-frame component checks cover interruption, reduced motion, hidden tabs, and cleanup. Visual acceptance remains pending. |
+| Changing context for the next question could let an arriving answer clear that choice. | Treat context-checkbox changes as user interaction, preventing automatic follow. | UI regression verifies the active topic and next context choice survive the returning answer. |
 
 Saved-chat tests cover returning to unfinished drafts, keeping legacy samples
 without opening them by default, failed-save recovery, and resetting placement

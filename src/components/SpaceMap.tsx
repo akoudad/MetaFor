@@ -1,0 +1,64 @@
+"use client";
+
+import { memo, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
+import type { SpatialNode, SpatialPoint } from "@/lib/spatial";
+import { MAP_HEIGHT, MAP_WIDTH, mapDestination, projectSpaceMap } from "@/lib/minimap";
+import type { SpatialLink } from "./SpatialWorld";
+
+type SpaceMapProps = {
+  nodes: SpatialNode[];
+  links: SpatialLink[];
+  activeId: string;
+  view: SpatialPoint;
+  labels?: Record<string, string>;
+  onNavigate: (id: string) => void;
+  onOverview: () => void;
+};
+
+function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview }: SpaceMapProps) {
+  const projection = useMemo(() => projectSpaceMap(nodes), [nodes]);
+  const byId = useMemo(() => new Map(projection.nodes.map((node) => [node.id, node])), [projection]);
+  const destination = mapDestination(view, projection);
+  const elements = useRef(new Map<string, SVGGElement>());
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const tabStop = focusedId && byId.has(focusedId) ? focusedId : byId.has(activeId) ? activeId : projection.nodes[0]?.id;
+  const drawn = [...projection.nodes].sort((a, b) => a.id === activeId ? 1 : b.id === activeId ? -1 : a.depth - b.depth);
+
+  const keydown = (event: KeyboardEvent<SVGGElement>, id: string) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onNavigate(id); return; }
+    const index = projection.nodes.findIndex((node) => node.id === id);
+    let next = index;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % projection.nodes.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (index + projection.nodes.length - 1) % projection.nodes.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = projection.nodes.length - 1;
+    else return;
+    event.preventDefault();
+    elements.current.get(projection.nodes[next].id)?.focus();
+  };
+
+  return <aside className="space-map" aria-label="Conversation map">
+    <div className="space-map-heading"><span>Map</span><button className="space-map-overview" type="button" onClick={onOverview} aria-label="Show all topics" title="Show all topics">↗</button></div>
+    <svg className="space-map-viewport" viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`} width={MAP_WIDTH} height={MAP_HEIGHT} role="group" aria-label="Topics in three dimensions" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null); }}>
+      {links.map((link, index) => {
+        const from = byId.get(link.from);
+        const to = byId.get(link.to);
+        return from && to && from.id !== to.id ? <line key={`${link.from}:${link.to}:${index}`} className={`space-map-edge ${link.type === "related" ? "is-related" : ""}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeDasharray={link.type === "related" ? "2 3" : undefined} aria-hidden="true" /> : null;
+      })}
+      {destination && <g className={`space-map-camera ${destination.outside ? "is-outside" : ""}`} transform={`translate(${destination.x} ${destination.y}) rotate(${destination.angle})`} aria-hidden="true" pointerEvents="none">
+        <title>{destination.outside ? "Camera destination is beyond this map; the marker points toward it." : "Camera destination"}</title>
+        <path d={destination.outside ? "M4 0L-3 -3L-3 3Z" : "M0 -4L4 0L0 4L-4 0Z"} />
+      </g>}
+      {drawn.map((node) => <g key={node.id} ref={(element) => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }} className={`space-map-node ${node.id === activeId ? "is-active" : ""}`} data-map-node={node.id} transform={`translate(${node.x} ${node.y})`} role="button" tabIndex={node.id === tabStop ? 0 : -1} aria-label={`Focus topic: ${labels?.[node.id] || node.id}`} aria-current={node.id === activeId ? "location" : undefined} onFocus={() => setFocusedId(node.id)} onClick={() => onNavigate(node.id)} onKeyDown={(event) => keydown(event, node.id)}>
+        <title>{labels?.[node.id] || node.id}</title>
+        <circle className="space-map-hit" r={8} style={{ fill: "transparent", stroke: "none" }} />
+        <circle className="space-map-dot" r={node.id === activeId ? 3.4 : 2.2} />
+      </g>)}
+      {!projection.nodes.length && <text className="space-map-empty" x={MAP_WIDTH / 2} y={MAP_HEIGHT / 2} textAnchor="middle">No topics yet</text>}
+    </svg>
+    <span className="space-map-legend" title="The camera’s destination while moving between topics.">◇ Destination</span>
+  </aside>;
+}
+
+export default memo(SpaceMap);

@@ -10,19 +10,25 @@ connections, independently of where topics appear on screen.
 
 1. Enter an empty black space and type beside the orb. Receive a sectioned, live
    answer from a Meta model. No prewritten job conversation opens by default.
+   On submission the input clears, and the question appears in a pending card.
+   You can write the next draft while waiting.
 2. Select a passage or a section and ask about it. The model keeps a clarification
    in the current topic or opens a connected topic for a separate exploration.
    Placement is automatic; there are no branch/continue controls to manage.
 3. Follow the new topic while its source remains intact. A selected passage keeps
    its exact source. An unselected topic change retains its parent connection
    without claiming it came from an arbitrary section.
+   The camera briefly reveals the source and new topic together before entering
+   the answer. Navigating or typing interrupts the movement.
 4. Pull back from full answers to summaries and titles. Topics stay in the same
    space. Focus a topic, drag it by its handle, or jump through the navigation
-   rail. **Reset layout** restores the automatic arrangement. Longer topics have
+   rail or mini-map. **Reset layout** restores the automatic arrangement. Longer topics have
    an **In this topic** section outline.
 5. Return through the path or `Esc`. Drafts, selected passages, reading positions,
    and camera views are remembered. A pending answer remains attached to the
    question's original topic, even when you navigate elsewhere.
+   Stopped, failed, or interrupted questions can be retried or dismissed. Reload
+   never sends a question automatically, and recovery keeps the next draft intact.
 6. Use **New chat** for a different conversation and **Saved chats** to return.
    Existing content and unfinished drafts are retained. Export/import `.ingx`
    files to carry conversations between browsers. Older saved samples remain
@@ -31,6 +37,12 @@ connections, independently of where topics appear on screen.
 Scroll over space to zoom and inside an answer to read. Drag empty space to pan;
 click a topic to focus. Pinch and `+` / `−` zoom; `0` shows the overview. The left
 rail supports arrow keys and Enter. These controls remain a working design.
+
+The mini-map shows the conversation's spatial shape and highlights the active
+topic. Its diamond marks the camera destination. The space stays monochrome,
+with a softly colored input orb, a star cursor, and a slowly drifting starfield.
+Text keeps its normal selection cursor. Reduced motion disables the ambient
+movement and the arrival journey.
 
 The **Connections** panel separates suggested relationships from those you keep.
 Use **Include in next question** to explicitly add another topic's context.

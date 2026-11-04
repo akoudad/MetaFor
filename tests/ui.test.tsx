@@ -711,3 +711,162 @@ test("an unrelated manual position does not prevent recovery of an offscreen aut
   assert.equal(snapshot.view.places.weather.draft, "Keep the weather notes");
   assert.equal(snapshot.view.places.weather.scrollTop, 180);
 });
+
+test("submission clears immediately while its card and captured passage retain the question", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture("weather"));
+  const quote = "wind exposure before choosing the roof";
+  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  const question = "How do I measure this?";
+  await user.type(composer, `${question}{Enter}`);
+  assert.equal(composer.value, "", "submission must clear before the answer resolves");
+  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".pending-answer .original-question")?.textContent, question);
+  assert.equal(requests[0].selection?.quote, quote);
+  assert.equal(document.activeElement, composer);
+
+  // A next draft with identical words is still a separate draft. Old response
+  // cleanup must not erase it, and Enter must not submit it while unresolved.
+  await user.type(composer, `${question}{Enter}`);
+  assert.equal(requests.length, 1);
+  await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });
+  await ui.screen.findByText("Your answer is ready.", { exact: false });
+  assert.equal(composer.value, question);
+  assert.equal(activeTopic(), "Go to Weather records");
+  ui.fireEvent.pageHide(window);
+  const saved = await storage.loadSnapshot("ui-observatory");
+  assert.equal(saved!.view.pending, undefined);
+  assert.equal(saved!.view.places.weather.draft, question);
+});
+
+test("Stop retains a retryable question and Dismiss keeps the next draft", async () => {
+  let staleResolve!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { staleResolve = resolve; });
+  const user = await open(fixture("weather"));
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explain roof loads{Enter}Next draft stays here");
+  await user.click(ui.screen.getByRole("button", { name: "Stop" }));
+  assert.ok(ui.screen.getByRole("button", { name: "Retry" }));
+  assert.equal(composer.value, "Next draft stays here");
+  await user.type(composer, "{Enter}");
+  assert.equal(requests.length, 1);
+  ui.fireEvent.pageHide(window);
+  assert.equal((await storage.loadSnapshot("ui-observatory"))!.view.pending?.question, "Explain roof loads");
+  await user.click(ui.screen.getByRole("button", { name: "Dismiss" }));
+  assert.equal(composer.value, "Next draft stays here");
+  assert.equal(document.querySelector(".pending-answer"), null);
+  await ui.act(async () => { staleResolve(Response.json(result(requests[0]))); });
+  assert.equal(document.querySelector('[data-topic^="exploration-"]'), null, "an aborted response cannot reappear after dismissal");
+  ui.fireEvent.pageHide(window);
+  assert.equal((await storage.loadSnapshot("ui-observatory"))!.view.pending, undefined);
+});
+
+test("an error retries the captured request without consuming or replacing the next draft", async () => {
+  answer = () => Response.json({ error: "Temporary test failure" }, { status: 503 });
+  const user = await open(fixture("weather"));
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explain the original question{Enter}");
+  await ui.screen.findByRole("button", { name: "Retry" });
+  assert.equal(composer.value, "");
+  await user.type(composer, "New draft after the error{Enter}");
+  assert.equal(requests.length, 1, "error recovery cannot silently become a different request");
+  answer = (request) => Response.json(result(request, "continue"));
+  await user.click(ui.screen.getByRole("button", { name: "Retry" }));
+  await ui.waitFor(() => assert.equal(document.querySelector(".pending-answer"), null));
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], requests[0]);
+  assert.equal(composer.value, "New draft after the error");
+});
+
+test("reload preserves an unfinished question and another topic's draft without auto-sending", async () => {
+  answer = () => new Promise<Response>(() => {});
+  const user = await open(fixture("weather"));
+  const quote = "wind exposure before choosing the roof";
+  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain this exact passage{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Focus topic: Choose equipment" }));
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Next equipment question");
+  ui.fireEvent.pageHide(window);
+  const before = await storage.loadSnapshot("ui-observatory");
+  assert.equal(before!.view.pending?.question, "Explain this exact passage");
+  assert.equal(before!.view.places.weather.draft, "");
+  assert.equal(before!.view.places.equipment.draft, "Next equipment question");
+  ui.cleanup();
+  await open();
+  assert.equal(requests.length, 1, "restoring recovery metadata must never call the model");
+  assert.equal(activeTopic(), "Go to Choose equipment");
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Next equipment question");
+  await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
+  assert.equal(activeTopic(), "Go to Weather records");
+  answer = (request) => Response.json(result(request, "continue"));
+  await user.click(ui.screen.getByRole("button", { name: "Retry" }));
+  await ui.waitFor(() => assert.equal(document.querySelector(".pending-answer"), null));
+  assert.equal(requests[1].question, requests[0].question);
+  assert.equal(requests[1].requestId, requests[0].requestId);
+  assert.deepEqual(requests[1].selection, requests[0].selection);
+  await user.click(ui.screen.getByRole("button", { name: "Focus topic: Choose equipment" }));
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Next equipment question");
+});
+
+test("New chat saves a paused question and draft that return from Saved chats", async () => {
+  answer = () => new Promise<Response>(() => {});
+  const user = await open(fixture("weather"));
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Keep this submitted question{Enter}Keep this next draft");
+  await user.click(ui.screen.getByRole("button", { name: "Stop" }));
+  await user.click(ui.screen.getByRole("button", { name: "New chat" }));
+  await ui.screen.findByRole("heading", { name: "What’s on your mind?" });
+  await user.click(ui.screen.getByRole("button", { name: "Saved chats" }));
+  await user.click(await ui.screen.findByRole("button", { name: /Plan an observatory\d/ }));
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
+  assert.equal(document.querySelector(".pending-answer .original-question")?.textContent, "Keep this submitted question");
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Keep this next draft");
+  assert.equal(requests.length, 1);
+});
+
+test("typing during a new topic's arrival freezes the displayed camera and preserves the draft", async () => {
+  manualAnimation = true; prefersReducedMotion = false;
+  answer = (request) => Response.json(result(request));
+  const user = await open(fixture());
+  const stepFrame = async (time: number) => {
+    const callbacks = [...manualFrames.values()]; manualFrames.clear();
+    await ui.act(async () => { for (const callback of callbacks) callback(time); });
+  };
+  await stepFrame(1000);
+  const root = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
+  const start = root.style.transform;
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explore roof design{Enter}");
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
+  for (let frame = 1; frame <= 8; frame++) await stepFrame(1000 + frame * 50);
+  const displayed = root.style.transform;
+  assert.notEqual(displayed, start, "a followed new topic should begin its spatial camera journey");
+  await user.type(composer, "Keep this viewpoint while I type");
+  await stepFrame(1450);
+  assert.equal(root.style.transform, displayed, "typing must stop at the visible camera, not resume toward the old destination");
+  for (let frame = 1; frame <= 30; frame++) await stepFrame(1450 + frame * 50);
+  assert.equal(root.style.transform, displayed);
+  ui.fireEvent.pageHide(window);
+  const snapshot = (await storage.loadSnapshot("ui-observatory"))!;
+  const displayedScale = Number(displayed.match(/scale\(([^)]+)\)/)?.[1]);
+  const focal = 780 / (2 * Math.tan(25 * Math.PI / 180));
+  assert.ok(Math.abs(snapshot.view.view.z - focal / displayedScale) < 1e-9);
+  assert.equal(snapshot.view.places[snapshot.view.activeId].draft, "Keep this viewpoint while I type");
+});
+
+test("choosing context for the next question prevents a pending answer from clearing it", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture("weather"));
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain the weather{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Conversation menu" }));
+  await user.click(ui.screen.getByRole("button", { name: "Connections" }));
+  const checkbox = ui.screen.getByRole("checkbox", { name: "Choose equipment" }) as HTMLInputElement;
+  await user.click(checkbox);
+  await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });
+  await ui.screen.findByText("Your answer is ready.", { exact: false });
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(checkbox.checked, true, "new context choices must not be cleared by the previous answer");
+  assert.equal(requests.length, 1);
+});
