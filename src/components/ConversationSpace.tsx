@@ -15,6 +15,8 @@ import type { AnswerRequest, AnswerResult, ModelStatus } from "@/lib/contracts";
 import { normalizeText, messageText } from "@/lib/markdown";
 import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, applyPositionOverrides, fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
 import type { SpatialPoint } from "@/lib/spatial";
+import { consumeScrollGesture, stepSemanticScroll } from "@/lib/semantic-scroll";
+import type { ScrollGesture } from "@/lib/semantic-scroll";
 
 type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number };
 type Pointer = { x: number; y: number };
@@ -47,6 +49,11 @@ export default function ConversationSpace() {
   const baseNodes = useMemo(() => layoutSpace(space), [space]);
   const nodes = useMemo(() => applyPositionOverrides(baseNodes, positions), [baseNodes, positions]);
   const [overview, setOverview] = useState(false);
+  const [choiceParentId, setChoiceParentState] = useState<string | null>(null);
+  const choiceNow = useRef<string | null>(null);
+  const setChoiceParent = useCallback((id: string | null) => { choiceNow.current = id; setChoiceParentState(id); }, []);
+  const [scrollHint, setScrollHint] = useState("");
+  const scrollGesture = useRef<ScrollGesture | null>(null);
   const [draft, setDraftState] = useState("");
   const draftNow = useRef("");
   const setDraft = useCallback((value: string) => { draftNow.current = value; setDraftState(value); }, []);
@@ -88,6 +95,7 @@ export default function ConversationSpace() {
   const [library, setLibrary] = useState<{ id: string; title: string; savedAt: string }[]>([]);
   const [scrollRevision, setScrollRevision] = useState(0);
   const stage = useRef<HTMLDivElement>(null);
+  const choicePanel = useRef<HTMLElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const saved = useRef<Record<string, SavedPlace>>({});
@@ -107,30 +115,36 @@ export default function ConversationSpace() {
   const abort = useRef<AbortController | null>(null);
   const navigation = useRef(0);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readerFocusFrame = useRef<number | null>(null);
+  const cancelReaderFocus = useCallback(() => {
+    if (readerFocusFrame.current !== null) cancelAnimationFrame(readerFocusFrame.current);
+    readerFocusFrame.current = null;
+  }, []);
   const active = space.explorations[activeId] ?? space.explorations[space.rootId];
   const path = getPath(space, active.id);
   const links = useMemo(() => [
     ...Object.values(space.explorations).filter((item) => item.parentId).map((item) => ({ from: item.parentId!, to: item.id, type: "origin" as const })),
     ...(space.connections ?? []).filter((link) => link.status === "accepted" || connections).filter((link) => connections || link.from === activeId || link.to === activeId).map((link) => ({ from: link.from, to: link.to, type: "related" as const, status: link.status, reason: link.reason })),
   ], [space, activeId, connections]);
+  const choiceIds = useMemo(() => choiceParentId ? [choiceParentId, ...Object.values(space.explorations).filter((item) => item.parentId === choiceParentId).map((item) => item.id)] : undefined, [choiceParentId, space]);
   const pointFor = useCallback((id: string) => nodes.find((node) => node.id === id)?.position ?? { x: 0, y: 0, z: 0 }, [nodes]);
   const size = () => ({ width: stage.current?.clientWidth ?? 1000, height: stage.current?.clientHeight ?? 700 });
   const setCamera = (next: SpatialPoint) => { viewNow.current = next; setView(next); };
   useEffect(() => { viewNow.current = view; activeNow.current = activeId; spaceNow.current = space; }, [view, activeId, space]);
 
   const markInteraction = useCallback(() => {
-    dismissSelectionPreview();
+    dismissSelectionPreview(); cancelReaderFocus(); setScrollHint("");
     navigation.current += 1;
     if (transitionNow.current) {
       // A text edit or selection has no new camera target of its own. Stop an
       // arrival journey at the rendered camera instead of continuing it behind typing.
       setCamera({ ...renderedView.current }); setTransition(null);
     }
-  }, [dismissSelectionPreview, setTransition]);
+  }, [dismissSelectionPreview, cancelReaderFocus, setTransition]);
 
   const remember = useCallback(() => {
     const id = activeNow.current;
-    const readingView = overview ? saved.current[id]?.view ?? viewNow.current : viewNow.current;
+    const readingView = overview || choiceNow.current ? saved.current[id]?.view ?? viewNow.current : viewNow.current;
     saved.current[id] = { view: readingView, draft: draftNow.current, selection: selectionNow.current, scrollTop: readers.current.get(id)?.scrollTop ?? saved.current[id]?.scrollTop ?? 0 };
   }, [overview]);
 
@@ -138,7 +152,7 @@ export default function ConversationSpace() {
     remember();
     const request = pendingNow.current?.request;
     const recovery = request ? { requestId: request.requestId, activeId: request.activeId, question: request.question, selection: request.selection, includeIds: request.includeIds } : undefined;
-    return { format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation: spaceNow.current, view: { activeId: activeNow.current, view: viewNow.current, overview, started: started || Boolean(request), places: { ...saved.current }, history: [...history.current], positions, ...(recovery ? { pending: recovery } : {}) } };
+    return { format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation: spaceNow.current, view: { activeId: activeNow.current, view: choiceNow.current ? saved.current[activeNow.current]?.view ?? viewNow.current : viewNow.current, overview: choiceNow.current ? false : overview, started: started || Boolean(request), places: { ...saved.current }, history: [...history.current], positions, ...(recovery ? { pending: recovery } : {}) } };
   }, [remember, space, active.id, view, overview, started, positions]);
   const snapshotNow = useRef(snapshot);
   useLayoutEffect(() => { snapshotNow.current = snapshot; }, [snapshot]);
@@ -146,6 +160,7 @@ export default function ConversationSpace() {
   const restore = (next: Snapshot) => {
     abort.current?.abort();
     markInteraction();
+    setChoiceParent(null); scrollGesture.current = null;
     setPending(null); setUnreadId(null); setUnreadMessageId(null);
     saved.current = next.view.places;
     history.current = next.view.history;
@@ -189,7 +204,7 @@ export default function ConversationSpace() {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(query.matches);
     update(); query.addEventListener("change", update);
-    return () => { cancelled = true; query.removeEventListener("change", update); abort.current?.abort(); if (scrollTimer.current) clearTimeout(scrollTimer.current); };
+    return () => { cancelled = true; query.removeEventListener("change", update); abort.current?.abort(); cancelReaderFocus(); if (scrollTimer.current) clearTimeout(scrollTimer.current); };
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -232,7 +247,7 @@ export default function ConversationSpace() {
 
   const focus = useCallback((id: string) => {
     if (switchingNow.current || !space.explorations[id]) return;
-    remember(); markInteraction();
+    remember(); markInteraction(); setChoiceParent(null);
     if (id !== activeId) pushHistory(activeId);
     const previous = saved.current[id];
     const { width, height } = size();
@@ -245,7 +260,7 @@ export default function ConversationSpace() {
 
   const showOverview = useCallback(() => {
     if (switchingNow.current || overview) return;
-    remember(); markInteraction();
+    remember(); markInteraction(); setChoiceParent(null);
     const { width, height } = size();
     setCamera(fitOverview(nodes, width, height)); setStarted(true); setOverview(true);
     hover.current = null; wheelAnchor.current = null;
@@ -254,6 +269,7 @@ export default function ConversationSpace() {
   const back = useCallback(() => {
     if (switchingNow.current) return;
     markInteraction();
+    if (choiceNow.current) { const id = choiceNow.current; focus(id); setCamera(saved.current[id]?.view ?? focusView(pointFor(id), size().width, size().height)); return; }
     if (overview) { setCamera(saved.current[activeId]?.view ?? focusView(pointFor(activeId), size().width, size().height)); setOverview(false); return; }
     const id = history.current.pop() ?? active.parentId;
     if (!id || !space.explorations[id]) { showOverview(); return; }
@@ -263,18 +279,18 @@ export default function ConversationSpace() {
     setCamera(previous?.view ?? focusView(pointFor(id), size().width, size().height));
     setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setIncludeIds([]); setOverview(false); setNotice("");
     hover.current = null; wheelAnchor.current = null;
-  }, [active.parentId, activeId, overview, pointFor, remember, showOverview, space]);
+  }, [active.parentId, activeId, overview, pointFor, remember, showOverview, space, focus]);
 
   const activate = useCallback((id: string) => {
     if (switchingNow.current || id === activeId || !space.explorations[id]) return;
-    remember(); markInteraction(); pushHistory(activeId);
+    remember(); markInteraction(); setChoiceParent(null); pushHistory(activeId);
     activeNow.current = id; setActiveId(id);
     setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setIncludeIds([]); setNotice("");
   }, [activeId, remember, space]);
 
   const zoom = useCallback((delta: number, anchor?: SpatialPoint, anchorId?: string) => {
     if (switchingNow.current) return;
-    markInteraction();
+    markInteraction(); setChoiceParent(null);
     const id = anchorId ?? hover.current ?? activeId;
     const point = anchor ?? pointFor(id);
     const next = zoomView(viewNow.current, point, delta);
@@ -286,30 +302,119 @@ export default function ConversationSpace() {
     setOverview(false);
   }, [activeId, activate, pointFor]);
 
+  const resumeTopic = useCallback((id: string) => {
+    const leavingChoice = Boolean(choiceNow.current);
+    const previousChoiceFocus = choicePanel.current?.contains(document.activeElement) ? document.activeElement : null;
+    const camera = saved.current[id]?.view;
+    focus(id);
+    if (camera) setCamera(camera);
+    if (leavingChoice) {
+      const generation = navigation.current;
+      const deadline = performance.now() + 1800;
+      const focusWhenReadable = () => {
+        readerFocusFrame.current = null;
+        if (navigation.current !== generation || activeNow.current !== id || choiceNow.current || performance.now() > deadline) return;
+        const reader = readers.current.get(id);
+        const node = reader?.closest<HTMLElement>("[data-node-id]");
+        const focused = document.activeElement;
+        if (focused && focused !== document.body && focused !== previousChoiceFocus && focused !== reader) return;
+        if (reader && node?.dataset.detail === "full" && node.style.visibility === "visible" && !node.inert) {
+          reader.focus({ preventScroll: true });
+        } else readerFocusFrame.current = requestAnimationFrame(focusWhenReadable);
+      };
+      readerFocusFrame.current = requestAnimationFrame(focusWhenReadable);
+    }
+  }, [focus]);
+
+  useEffect(() => {
+    if (choiceParentId) choicePanel.current?.querySelector<HTMLButtonElement>(".topic-choice-list button")?.focus({ preventScroll: true });
+  }, [choiceParentId]);
+
+  const exploreChildren = useCallback((id: string) => {
+    if (switchingNow.current || !space.explorations[id]) return;
+    const children = Object.values(space.explorations).filter((item) => item.parentId === id);
+    if (activeNow.current !== id) focus(id);
+    remember(); markInteraction();
+    if (!children.length) { setScrollHint("Ask a follow-up to explore further."); return; }
+    if (children.length === 1) { resumeTopic(children[0].id); return; }
+    setChoiceParent(id); setOverview(false);
+    const ids = new Set([id, ...children.map((item) => item.id)]);
+    setCamera(fitOverview(nodes.filter((node) => ids.has(node.id)), size().width, size().height));
+    hover.current = null; wheelAnchor.current = null;
+  }, [space, focus, remember, markInteraction, resumeTopic, nodes, setChoiceParent]);
+
   useEffect(() => {
     const element = stage.current;
     if (!element || !started) return;
     const wheel = (event: WheelEvent) => {
       const target = event.target as HTMLElement;
-      if (!event.ctrlKey && target.closest('.world-node[data-detail="full"] .topic-reading')) {
-        markInteraction();
-        const id = target.closest<HTMLElement>("[data-topic]")?.dataset.topic;
-        if (id) activate(id);
+      if (switchingNow.current) return;
+      // Leave horizontal tables/code and trackpad gestures with their native owner.
+      if (event.shiftKey || (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY))) { markInteraction(); return; }
+      const now = performance.now();
+      const delta = normalizeWheel(event.deltaY, event.deltaMode);
+      if (!delta) return;
+      const scope = () => `${space.id}:${choiceNow.current ? `choice:${choiceNow.current}` : overview ? "overview" : `topic:${activeNow.current}`}`;
+      if (event.ctrlKey) {
+        if (event.cancelable) event.preventDefault();
+        scrollGesture.current = consumeScrollGesture(scope(), delta, now);
+        if (!wheelAnchor.current || now - wheelAnchor.current.time > 180) {
+          const id = target.closest<HTMLElement>("[data-topic]")?.dataset.topic ?? hover.current ?? activeNow.current;
+          wheelAnchor.current = { point: pointFor(id), id, time: now };
+        }
+        wheelAnchor.current.time = now;
+        zoom(delta * 2, wheelAnchor.current.point, wheelAnchor.current.id);
         return;
       }
-      if (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
-      if (event.cancelable) event.preventDefault();
-      const now = performance.now();
-      if (!wheelAnchor.current || now - wheelAnchor.current.time > 180) {
-        const id = target.closest<HTMLElement>("[data-topic]")?.dataset.topic ?? hover.current ?? activeId;
-        wheelAnchor.current = { point: pointFor(id), id, time: now };
+      const nativeReader = target.closest<HTMLDivElement>('.world-node[data-detail="full"] .topic-reading');
+      const nativeId = nativeReader?.closest<HTMLElement>("[data-topic]")?.dataset.topic;
+      if (!choiceNow.current && !overview && nativeId && nativeId !== activeNow.current) activate(nativeId);
+      const id = activeNow.current;
+      const choiceList = choiceNow.current ? target.closest<HTMLDivElement>(".topic-choice-list") : null;
+      const reader = choiceList ?? readers.current.get(id);
+      const node = reader?.closest<HTMLElement>("[data-node-id]");
+      const full = !overview && !choiceNow.current && node?.dataset.detail === "full" && node.style.visibility !== "hidden";
+      const max = Math.max(0, (reader?.scrollHeight ?? 0) - (reader?.clientHeight ?? 0));
+      const top = Math.max(0, Math.min(max, reader?.scrollTop ?? 0));
+      const remaining = full || choiceList ? delta > 0 ? max - top : top : 0;
+      const result = stepSemanticScroll(scrollGesture.current, { scope: scope(), delta, now, remaining });
+      scrollGesture.current = result.state;
+      markInteraction();
+      if (result.action === "read" && reader) {
+        if (choiceList || reader === nativeReader) return;
+        if (event.cancelable) event.preventDefault();
+        reader.scrollTop = Math.max(0, Math.min(max, top + delta));
+        remember();
+        if (scrollTimer.current) clearTimeout(scrollTimer.current);
+        scrollTimer.current = setTimeout(() => setScrollRevision((value) => value + 1), 250);
+        return;
       }
-      wheelAnchor.current.time = now;
-      zoom(normalizeWheel(event.deltaY, event.deltaMode) * (event.ctrlKey ? 2 : 1), wheelAnchor.current.point, wheelAnchor.current.id);
+      if (event.cancelable) event.preventDefault();
+      if (result.action === "wait") {
+        if (full && remaining <= 1) {
+          const leaf = delta > 0 && !Object.values(space.explorations).some((item) => item.parentId === id);
+          setScrollHint(leaf ? "Ask a follow-up to explore further." : delta > 0 ? "Pause, then scroll down to explore." : "Pause, then scroll up to return.");
+        }
+        return;
+      }
+      if (choiceNow.current) {
+        if (delta < 0) resumeTopic(choiceNow.current);
+        return;
+      }
+      if (overview) { if (delta > 0) resumeTopic(id); return; }
+      if (!full && delta > 0) { focus(id); return; }
+      if (delta > 0) exploreChildren(id);
+      else {
+        const parentId = space.explorations[id]?.parentId;
+        if (parentId) resumeTopic(parentId);
+        else showOverview();
+      }
     };
+    const chooser = choicePanel.current;
     element.addEventListener("wheel", wheel, { passive: false });
-    return () => element.removeEventListener("wheel", wheel);
-  }, [activeId, activate, pointFor, started, zoom]);
+    chooser?.addEventListener("wheel", wheel, { passive: false });
+    return () => { element.removeEventListener("wheel", wheel); chooser?.removeEventListener("wheel", wheel); };
+  }, [space, activate, pointFor, started, zoom, overview, choiceParentId, markInteraction, remember, resumeTopic, focus, showOverview, exploreChildren]);
 
   useEffect(() => {
     const keydown = (event: globalThis.KeyboardEvent) => {
@@ -318,6 +423,7 @@ export default function ConversationSpace() {
       if (event.key === "Escape") {
         if (selectionPreview) { event.preventDefault(); dismissSelectionPreview(); return; }
         if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); }
+        else if (choiceNow.current) resumeTopic(choiceNow.current);
         else if (started) back();
         return;
       }
@@ -330,7 +436,7 @@ export default function ConversationSpace() {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom, selectionPreview, dismissSelectionPreview]);
+  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom, selectionPreview, dismissSelectionPreview, resumeTopic]);
 
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (switchingNow.current) return;
@@ -498,6 +604,7 @@ export default function ConversationSpace() {
     if (pendingNow.current) { setNotice("Retry or dismiss the unfinished question before sending another."); return; }
     const question = draftNow.current.trim();
     if (question.length > 8000) { setNotice("Keep the question below 8,000 characters."); return; }
+    if (choiceNow.current) resumeTopic(activeNow.current);
     markInteraction(); remember();
     const source = selectionNow.current;
     const originId = source?.explorationId ?? activeNow.current;
@@ -524,7 +631,7 @@ export default function ConversationSpace() {
 
   const resetLayout = () => {
     if (switchingNow.current || !started) return;
-    remember(); markInteraction();
+    remember(); markInteraction(); setChoiceParent(null);
     const { width, height } = size();
     for (const node of baseNodes) {
       const place = saved.current[node.id];
@@ -593,7 +700,7 @@ export default function ConversationSpace() {
     setSpace((current) => ({ ...current, connections: current.connections?.map((link) => link.id === id ? { ...link, status: "accepted" } : link) }));
   };
   const dismissConnection = (id: string) => { if (switchingNow.current) return; setSpace((current) => ({ ...current, connections: current.connections?.filter((link) => link.id !== id) })); };
-  const chooseSection = (source: SourceReference) => { if (switchingNow.current) return; markInteraction(); if (source.explorationId !== activeId) activate(source.explorationId); setSelection(source); composer.current?.focus(); };
+  const chooseSection = (source: SourceReference) => { if (switchingNow.current) return; markInteraction(); if (choiceNow.current) resumeTopic(source.explorationId); else if (source.explorationId !== activeId) activate(source.explorationId); setSelection(source); composer.current?.focus(); };
   const openSource = (source: SourceReference) => {
     if (switchingNow.current) return;
     const conversationId = space.id;
@@ -624,7 +731,7 @@ export default function ConversationSpace() {
       </div>
     </header>
     {started && <nav className="breadcrumbs" aria-label="Conversation path"><button onClick={back} aria-label="Return to previous view">←</button>{path.map((item, index) => <span key={item.id}>{index > 0 && <i>/</i>}<button onClick={() => focus(item.id)} aria-current={item.id === activeId ? "page" : undefined}>{item.title}</button></span>)}</nav>}
-    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll over space to zoom. Scroll inside an answer to read.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select any passage, then ask about it below. Related ideas stay connected as your conversation grows.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Pinch or + / − to zoom. Esc returns. 0 shows everything.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
+    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll to read the current answer, even over empty space. At its end, pause and scroll again to explore connected topics.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, then write your question below. Related ideas stay connected as your conversation grows.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Scroll up from the beginning to return. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 shows everything.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
     {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
       <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
       <p className="panel-explainer">Saved in this browser.</p>
@@ -647,8 +754,8 @@ export default function ConversationSpace() {
     </aside>}
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
     <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
-      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition}>
-        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onSource={openSource} readingRef={(element) => {
+      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds}>
+        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onExplore={() => { scrollGesture.current = consumeScrollGesture(`${space.id}:topic:${node.id}`, 1, performance.now()); exploreChildren(node.id); }} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
         }} onScroll={(top) => {
@@ -661,6 +768,12 @@ export default function ConversationSpace() {
       {!started && <div className="welcome"><h1>What’s on your mind?</h1></div>}
     </div>
     {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { chooseSection(selectionPreview.source); window.getSelection()?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
+    {choiceParentId && <aside ref={choicePanel} className="topic-choice" aria-label="Choose a topic">
+      <div className="topic-choice-heading"><h2>Choose a topic</h2><button className="topic-choice-return" onClick={() => resumeTopic(choiceParentId)}>Return to {space.explorations[choiceParentId].title}</button></div>
+      <p>Explore {space.explorations[choiceParentId].title}</p>
+      <div className="topic-choice-list">{Object.values(space.explorations).filter((item) => item.parentId === choiceParentId).map((item) => <button key={item.id} onClick={() => resumeTopic(item.id)}>Explore {item.title}</button>)}</div>
+    </aside>}
+    {scrollHint && <p className="scroll-boundary-hint" role="status">{scrollHint}</p>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
     {started && <SpaceMap nodes={nodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
@@ -672,7 +785,7 @@ export default function ConversationSpace() {
     </div>
     {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onSubmit={(event) => { event.preventDefault(); setShowAccess(false); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => setShowAccess(false)} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}
     {switching && <div className="workspace-transition" role="status">Opening conversation…</div>}
-    <footer className="navigation-hint"><span>{started ? "SPACE: SCROLL TO ZOOM · DRAG TO MOVE     TEXT: SELECT TO ASK" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
+    <footer className="navigation-hint"><span>{started ? "SCROLL TO READ · PAUSE AT THE EDGE TO EXPLORE · PINCH TO ZOOM" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
     <span className="sr-only" role="status" aria-live="polite">{started ? `${active.title}, depth ${getDepth(space, active.id)}${overview ? ", overview" : ""}` : "Ready for your question"}</span>
   </main>;
 }

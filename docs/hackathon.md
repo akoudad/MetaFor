@@ -16,12 +16,14 @@ Local release candidate · 2026-11-04
 - [x] Preserve existing work when a request, save, or import fails.
 - [x] Long-answer outline and keyboard navigation through a crowded space.
 - [x] Source-to-detail arrival motion and a navigable isometric mini-map.
+- [x] Wheel/trackpad reading with parent/child navigation at edges and an explicit path chooser.
+- [x] Preserve reading positions and drafts when returning, including after a chooser reload.
 - [x] Varied drifting stars, a faint galaxy, restrained meteors, a glowing orb, and star cursor.
 - [x] Setup, deployment instructions, example file, and a short demo script.
 
 ## Verification
 
-- 108 automated tests pass, including 35 integrated conversation UI tests and
+- 126 automated tests pass, including 46 integrated conversation UI tests and
   three mini-map/scene DOM tests.
 - Type checking and the production build pass.
 - Three real `muse-spark-1.3` calls during backend verification covered the first answer,
@@ -43,6 +45,10 @@ Local release candidate · 2026-11-04
   reduced motion, and cleanup. Mini-map tests cover large/extreme layouts and
   keyboard navigation. Pending-question tests cover Stop, retry, Dismiss, reload
   without automatic sending, and preservation of a separately typed next draft.
+- Semantic-scroll tests cover native and empty-space reading, one transition per
+  gesture, parent/child paths, chooser scrolling, keyboard focus, leaf guidance,
+  zoom isolation, and saved-place recovery. These simulate wheel sequences;
+  physical trackpad inertia still needs a browser check.
 
 ## Remaining release checks
 

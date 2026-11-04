@@ -27,6 +27,21 @@ The mini-map projects actual topic coordinates isometrically and supports pointe
 and keyboard navigation. Its diamond marks the camera destination, not a live
 camera position. This keeps ambient and camera frames out of React state updates.
 
+Ordinary wheel input follows reading and navigation parents. Native answer
+scrolling is preserved; wheel input over empty space scrolls the active reader.
+At an edge, a gesture gate requires fresh intent after a brief quiet interval,
+and permits at most one semantic step per gesture. Reaching an edge while reading
+does not immediately move to another topic. Pinch/Ctrl-wheel and explicit zoom
+controls retain geometric camera movement.
+
+The reading, child-choice, and overview states are separate. A child-choice view
+frames its parent and direct children while keeping other readers mounted and
+hidden so their reading positions survive. An HTML chooser keeps titles legible
+even in a wide tree. Only `parentId` determines these paths; related links do not.
+Return navigation restores saved reading state rather than forcing the parent to
+its beginning or end. Scrolling never invokes generation or selects a child from
+a multi-child choice automatically.
+
 Automatic positions use stable horizontal lanes within depth rows. Spacing
 accounts for perspective to keep fitted overviews from overlapping cards.
 Manual positions are applied separately from conversation validation so dragging

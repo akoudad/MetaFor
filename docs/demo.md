@@ -29,8 +29,10 @@ if you use it.
 4. **1:30–1:55 · Clarify and return.** Ask: “Does a 304 response include the full
    representation body? Keep it brief.” Use the parent breadcrumb or source link.
    “A short clarification can stay in its topic; the original answer is intact.”
-5. **1:55–2:20 · Arrange.** Pull back with the wheel over empty
-   space, then use the mini-map to focus the topic again. Point out the source arrow and preserved
+5. **1:55–2:20 · Navigate and arrange.** At the beginning of a detail, scroll up
+   to return to the parent's saved place. At its end, use **Explore topics**
+   or a fresh downward gesture to revisit the detail. Use the zoom-out control
+   to show the wider space, then the mini-map to focus a topic. Point out the source arrow and preserved
    original answer. Drag the topic handle, then use `⋯` → **Reset layout**.
    “Position and meaning are separate. I can arrange the space without changing
    the discussion.”

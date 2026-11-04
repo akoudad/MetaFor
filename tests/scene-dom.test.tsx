@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { focusView } from "../src/lib/spatial";
+import { fitOverview, focusView } from "../src/lib/spatial";
 import type { SpatialLink, SpatialTransition, WorldPoint } from "../src/components/SpatialWorld";
 
-test("the real scene interrupts arrival, honors reduced motion, and cancels its scheduled work", async () => {
+test("the real scene preserves masked readers, interrupts arrival, honors reduced motion, and cleans up", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
   const originals = new Map<string, PropertyDescriptor | undefined>();
   const install = (key: string, value: unknown) => {
@@ -38,9 +38,10 @@ test("the real scene interrupts arrival, honors reduced motion, and cancels its 
     let state = {
       nodes: [source], links: [] as SpatialLink[], activeId: source.id,
       view: start, reducedMotion: false, transition: null as SpatialTransition | null,
+      visibleIds: undefined as string[] | undefined,
     };
     const content = () => <SpatialWorld {...state} onViewChange={(view) => { rendered = view; }}>
-      {(node) => <article>{node.id}</article>}
+      {(node) => <article><div data-reader-id={node.id} style={{ height: 100, overflow: "auto" }}><p style={{ height: 1000 }}>{node.id}</p></div></article>}
     </SpatialWorld>;
     const scene = ui.render(content());
     const update = (changes: Partial<typeof state>) => { state = { ...state, ...changes }; scene.rerender(content()); };
@@ -82,6 +83,47 @@ test("the real scene interrupts arrival, honors reduced motion, and cancels its 
     assert.deepEqual(rendered, destination);
     assert.equal(frames.size, 0);
     assert.equal(dom.window.document.querySelector<HTMLElement>('[data-node-id="second"]')!.inert, false);
+
+    const overview = fitOverview(state.nodes, 1100, 780);
+    update({
+      view: overview, transition: null,
+      links: [{ from: source.id, to: child.id }, { from: source.id, to: second.id }],
+    });
+    tick();
+    const sourceCard = dom.window.document.querySelector<HTMLElement>('[data-node-id="source"]')!;
+    const childCard = dom.window.document.querySelector<HTMLElement>('[data-node-id="child"]')!;
+    const secondCard = dom.window.document.querySelector<HTMLElement>('[data-node-id="second"]')!;
+    const childReader = childCard.querySelector<HTMLElement>('[data-reader-id="child"]')!;
+    const lines = dom.window.document.querySelectorAll<SVGLineElement>("line");
+    childReader.scrollTop = 173;
+    assert.equal(childCard.style.visibility, "visible");
+    assert.equal(lines[0].style.visibility, "visible");
+
+    update({ visibleIds: [source.id, second.id] });
+    tick();
+    assert.equal(childCard.style.visibility, "hidden");
+    assert.equal(childCard.style.opacity, "0");
+    assert.equal(childCard.inert, true);
+    assert.equal(childCard.getAttribute("aria-hidden"), "true");
+    assert.equal(sourceCard.inert, false);
+    assert.equal(secondCard.inert, false);
+    assert.equal(lines[0].style.visibility, "hidden", "links to excluded cards must also hide");
+    assert.equal(lines[1].style.visibility, "visible");
+    assert.deepEqual(rendered, overview, "a visibility mask must not change the camera");
+
+    update({ visibleIds: [] });
+    tick();
+    assert.equal(sourceCard.style.visibility, "hidden");
+    assert.equal(secondCard.style.visibility, "hidden");
+    assert.equal(lines[1].style.visibility, "hidden");
+    update({ visibleIds: undefined });
+    tick();
+    assert.equal(dom.window.document.querySelector('[data-reader-id="child"]'), childReader, "masking must retain the mounted reader");
+    assert.equal(childReader.scrollTop, 173, "returning must retain the exact reading position");
+    assert.equal(childCard.style.visibility, "visible");
+    assert.equal(childCard.inert, false);
+    assert.equal(childCard.hasAttribute("aria-hidden"), false);
+    assert.equal(lines[0].style.visibility, "visible");
 
     update({ reducedMotion: false, transition: null, view: start });
     tick();

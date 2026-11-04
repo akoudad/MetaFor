@@ -37,9 +37,28 @@ connections, independently of where topics appear on screen.
    files to carry conversations between browsers. Older saved samples remain
    available in the library but are not restored automatically at startup.
 
-Scroll over space to zoom and inside an answer to read. Drag empty space to pan;
-click a topic to focus. Pinch and `+` / `−` zoom; `0` shows the overview. The left
-rail supports arrow keys and Enter. These controls remain a working design.
+Scroll inside an answer or over empty space to read the active topic. After
+reaching its bottom, pause briefly and continue down: one child opens directly;
+several children appear together with readable titles to choose from. The
+**Explore topics** action at the answer's end provides the same route without a
+wheel gesture. At a leaf, scrolling stays put and you can ask a follow-up.
+
+At the beginning, an upward gesture returns to the parent and its saved reading
+position. Continuing up through parents eventually reaches the root and then
+the overview. In a child chooser, up returns to its parent; down never picks a
+path silently. Scrolling down from the overview resumes the active topic.
+
+A gesture that reads text cannot also change levels. A fresh gesture is required
+at an edge, and momentum cannot cross several levels. Returning preserves the
+topic's draft and reading position, including a passage halfway through an answer.
+This follows navigation parents, independently of other related-topic links.
+
+Drag empty space to pan; click a topic to focus. Pinch, Ctrl-wheel, and `+` / `−`
+still control visual zoom; `0` shows the overview. The left rail and mini-map
+provide direct jumps when you want a different path.
+
+On touchscreens, swipe inside the answer to read and use **Explore topics**,
+the source link, or the chooser's return action to move between topics.
 
 The mini-map shows the conversation's spatial shape and highlights the active
 topic. Its diamond marks the camera destination. The space stays monochrome,

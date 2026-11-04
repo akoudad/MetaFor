@@ -201,6 +201,23 @@ function selectPassage(element: Element, quote: string) {
   ui.fireEvent.click(action);
 }
 
+function readerFor(id: string) {
+  return document.querySelector<HTMLDivElement>(`[data-topic="${id}"] .topic-reading`)!;
+}
+
+function wheelSpace(deltaY: number, options: { ctrlKey?: boolean; deltaX?: number } = {}) {
+  return ui.fireEvent.wheel(document.querySelector(".world-stage")!, { deltaY, deltaMode: 0, ...options });
+}
+
+async function quietWheel() {
+  await ui.act(async () => { await new Promise((resolve) => setTimeout(resolve, 220)); });
+}
+
+async function leaveInitialBoundary(direction: 1 | -1) {
+  await quietWheel();
+  wheelSpace(direction * 120);
+}
+
 test("selecting text offers an action without attaching context, calling the model, or taking focus", async () => {
   const user = await open(fixture("weather"));
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
@@ -364,6 +381,260 @@ test("section Ask controls still attach a source directly without submitting a q
   assert.equal(document.activeElement, composer);
   assert.equal(composer.value, "Keep this draft");
   assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
+  assert.equal(requests.length, 0);
+});
+
+test("plain wheel reads the answer natively or forwards blank-space movement to its visible reader", async () => {
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Keep my research draft");
+  const reader = readerFor("observatory");
+  reader.scrollTop = 300; ui.fireEvent.scroll(reader);
+  const camera = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!.style.transform;
+  assert.equal(ui.fireEvent.wheel(reader, { deltaY: 120, deltaMode: 0 }), true, "ordinary text reading retains native browser scrolling");
+  assert.equal(reader.scrollTop, 300, "jsdom does not emulate the browser's native wheel default");
+  reader.scrollTop = 420; ui.fireEvent.scroll(reader);
+  assert.equal(wheelSpace(80), false, "the app owns wheel movement over blank space");
+  assert.ok(reader.scrollTop > 420, "blank space advances the visible active answer");
+  const advanced = reader.scrollTop;
+  wheelSpace(-60);
+  assert.ok(reader.scrollTop < advanced, "blank space also reads upward while text remains");
+  assert.equal(document.querySelector<HTMLElement>('[data-node-id="observatory"]')!.style.transform, camera);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(composer.value, "Keep my research draft");
+  assert.equal(requests.length, 0);
+});
+
+test("reading momentum cannot descend, while a fresh deliberate edge gesture opens the only child once", async () => {
+  const initial = fixture();
+  delete initial.conversation.explorations.equipment;
+  await open(initial);
+  const reader = readerFor("observatory");
+  const end = reader.scrollHeight - reader.clientHeight;
+  reader.scrollTop = end - 40; ui.fireEvent.scroll(reader);
+  wheelSpace(120);
+  assert.equal(reader.scrollTop, end);
+  wheelSpace(120);
+  wheelSpace(120);
+  assert.equal(activeTopic(), "Go to Plan an observatory", "one reading gesture cannot spill into another topic");
+  await quietWheel();
+  wheelSpace(35);
+  assert.equal(activeTopic(), "Go to Plan an observatory", "small edge noise cannot navigate");
+  wheelSpace(35);
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(readerFor("weather").scrollTop, 0, "an unvisited child starts at the beginning");
+  wheelSpace(120);
+  wheelSpace(120);
+  assert.equal(readerFor("weather").scrollTop, 0, "residual momentum is swallowed after the topic changes");
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(requests.length, 0);
+});
+
+test("native text reading and its edge momentum use the same semantic gesture gate", async () => {
+  const initial = fixture();
+  delete initial.conversation.explorations.equipment;
+  await open(initial);
+  const reader = readerFor("observatory");
+  const end = reader.scrollHeight - reader.clientHeight;
+  reader.scrollTop = end - 40; ui.fireEvent.scroll(reader);
+  assert.equal(ui.fireEvent.wheel(reader, { deltaY: 120, deltaMode: 0 }), true);
+  // Emulate only the native default that jsdom does not implement.
+  reader.scrollTop = end; ui.fireEvent.scroll(reader);
+  assert.equal(ui.fireEvent.wheel(reader, { deltaY: 120, deltaMode: 0 }), false);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  await quietWheel();
+  ui.fireEvent.wheel(reader, { deltaY: 120, deltaMode: 0 });
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(requests.length, 0);
+});
+
+test("multiple children open a local chooser and downward wheel never chooses a child", async () => {
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Keep the parent draft");
+  const reader = readerFor("observatory");
+  reader.scrollTop = reader.scrollHeight - reader.clientHeight; ui.fireEvent.scroll(reader);
+  await leaveInitialBoundary(1);
+  const chooser = ui.screen.getByRole("complementary", { name: "Choose a topic" });
+  assert.ok(ui.within(chooser).getByRole("button", { name: "Explore Weather records" }));
+  assert.ok(ui.within(chooser).getByRole("button", { name: "Explore Choose equipment" }));
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  await quietWheel();
+  wheelSpace(300);
+  wheelSpace(300);
+  assert.equal(activeTopic(), "Go to Plan an observatory", "a fork requires an explicit choice");
+  assert.ok(ui.screen.getByRole("complementary", { name: "Choose a topic" }));
+  await user.click(ui.within(chooser).getByRole("button", { name: "Explore Weather records" }));
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  await leaveInitialBoundary(-1);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(readerFor("observatory").scrollTop, reader.scrollHeight - reader.clientHeight, "returning preserves the parent's end position");
+  assert.equal(composer.value, "Keep the parent draft");
+  assert.equal(requests.length, 0);
+});
+
+test("a long chooser reads natively and returns only on a fresh upward gesture at its top", async () => {
+  const initial = fixture();
+  for (let index = 0; index < 18; index++) {
+    const id = `extra-${index}`;
+    initial.conversation.explorations[id] = {
+      id, title: `Extra topic ${index + 1}`, summary: "A related observatory question.", parentId: "observatory",
+      source: { explorationId: "observatory", messageId: "site-answer", sectionId: "choose-site" }, position: [0, 0, -1000],
+      messages: [{ id: `${id}-answer`, role: "assistant", sections: [{ id: `${id}-section`, title: "A detail", body: "Keep this question available for exploration." }] }],
+    };
+  }
+  const user = await open(initial);
+  const reader = readerFor("observatory");
+  reader.scrollTop = 315; ui.fireEvent.scroll(reader);
+  await user.click(ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" }));
+  const list = document.querySelector<HTMLElement>(".topic-choice-list")!;
+  assert.equal(list.querySelectorAll("button").length, 20);
+  list.scrollTop = 80;
+  await quietWheel();
+  assert.equal(ui.fireEvent.wheel(list, { deltaY: -120, deltaMode: 0 }), true, "the scrollable chooser keeps native list reading");
+  list.scrollTop = 0; ui.fireEvent.scroll(list);
+  assert.equal(ui.fireEvent.wheel(list, { deltaY: -120, deltaMode: 0 }), false);
+  assert.ok(ui.screen.getByRole("complementary", { name: "Choose a topic" }), "momentum reaching the list top cannot leave the chooser");
+  await quietWheel();
+  ui.fireEvent.wheel(list, { deltaY: -120, deltaMode: 0 });
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(reader.scrollTop, 315);
+  await user.click(await ui.screen.findByRole("button", { name: "Explore topics from Plan an observatory" }));
+  await quietWheel();
+  ui.fireEvent.wheel(document.querySelector(".topic-choice-heading")!, { deltaY: -120, deltaMode: 0 });
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null, "upward scrolling over the heading also returns to the parent");
+  assert.equal(reader.scrollTop, 315);
+  assert.equal(requests.length, 0);
+});
+
+test("semantic upward navigation follows the parent and restores its middle position despite sibling history", async () => {
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Parent notes before inspecting a detail");
+  const rootReader = readerFor("observatory");
+  rootReader.scrollTop = 315; ui.fireEvent.scroll(rootReader);
+  await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await user.type(composer, "Weather draft");
+  await leaveInitialBoundary(-1);
+  assert.equal(activeTopic(), "Go to Plan an observatory", "semantic up is ancestry, not the previous visited sibling");
+  assert.equal(rootReader.scrollTop, 315);
+  assert.equal(composer.value, "Parent notes before inspecting a detail");
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  assert.equal(composer.value, "Weather draft");
+  ui.fireEvent.pageHide(window);
+  const saved = (await storage.loadSnapshot("ui-observatory"))!;
+  assert.equal(saved.view.places.observatory.scrollTop, 315);
+  assert.equal(saved.view.places.observatory.draft, "Parent notes before inspecting a detail");
+  assert.equal(saved.view.places.weather.draft, "Weather draft");
+  assert.equal(requests.length, 0);
+});
+
+test("a leaf boundary stays in place and invites a follow-up without generating an answer", async () => {
+  await open(fixture("weather"));
+  const reader = readerFor("weather");
+  reader.scrollTop = reader.scrollHeight - reader.clientHeight; ui.fireEvent.scroll(reader);
+  await leaveInitialBoundary(1);
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.ok(ui.screen.getByText("Ask a follow-up to explore further."));
+  wheelSpace(120);
+  assert.ok(ui.screen.getByText("Ask a follow-up to explore further."), "residual momentum keeps the useful leaf instruction");
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(requests.length, 0);
+});
+
+test("the explicit Explore action works from the keyboard and fork-up returns to the remembered reader", async () => {
+  const user = await open(fixture());
+  const reader = readerFor("observatory");
+  reader.scrollTop = 315; ui.fireEvent.scroll(reader);
+  const explore = ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" });
+  ui.act(() => explore.focus());
+  await user.keyboard("{Enter}");
+  const chooser = ui.screen.getByRole("complementary", { name: "Choose a topic" });
+  await ui.waitFor(() => assert.equal(chooser.contains(document.activeElement), true, "keyboard focus moves into the visible chooser"));
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  await quietWheel();
+  wheelSpace(-120);
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(reader.scrollTop, 315, "closing the fork restores the actual prior reading position");
+  await ui.waitFor(() => assert.equal(document.activeElement === reader, true, "returning focuses the visible parent reader"));
+  await user.click(await ui.screen.findByRole("button", { name: "Explore topics from Plan an observatory" }));
+  await user.keyboard("{Escape}");
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  await ui.waitFor(() => assert.equal(document.activeElement === reader, true, "Escape also returns focus to the visible parent reader"));
+  assert.equal(reader.scrollTop, 315);
+  assert.equal(requests.length, 0);
+});
+
+test("reloading during a fork restores the parent reading view, passage, draft, and scroll position", async () => {
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Compare these site constraints");
+  selectPassage(document.querySelector('[data-section-id="choose-site"] .answer-markdown p')!, "weather, access");
+  const reader = readerFor("observatory");
+  reader.scrollTop = 315; ui.fireEvent.scroll(reader);
+  ui.fireEvent.pageHide(window);
+  const before = (await storage.loadSnapshot("ui-observatory"))!;
+  await user.click(ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" }));
+  assert.ok(ui.screen.getByRole("complementary", { name: "Choose a topic" }));
+  ui.fireEvent.pageHide(window);
+  const saved = (await storage.loadSnapshot("ui-observatory"))!;
+  assert.deepEqual(saved.view.view, before.view.view, "a transient fork camera must not become the saved reading camera");
+  assert.deepEqual(saved.view.places.observatory.view, before.view.places.observatory.view);
+  assert.equal(saved.view.overview, false);
+  assert.equal(saved.view.places.observatory.scrollTop, 315);
+  assert.equal(saved.view.places.observatory.draft, "Compare these site constraints");
+  assert.deepEqual(saved.view.places.observatory.selection, before.view.places.observatory.selection);
+  ui.cleanup();
+  await open();
+  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(readerFor("observatory").scrollTop, 315);
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Compare these site constraints");
+  assert.equal(document.querySelector(".selection-chip p")?.textContent, "weather, access");
+  assert.equal(requests.length, 0);
+});
+
+test("root-top scrolling opens the overview and a fresh down gesture returns without reading", async () => {
+  await open(fixture());
+  const reader = readerFor("observatory");
+  await leaveInitialBoundary(-1);
+  assert.ok(ui.screen.getByText("Plan an observatory, depth 0, overview"));
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  wheelSpace(120);
+  assert.ok(ui.screen.getByText("Plan an observatory, depth 0, overview"), "residual events cannot immediately exit overview");
+  await quietWheel();
+  wheelSpace(120);
+  assert.equal(ui.screen.queryByText("Plan an observatory, depth 0, overview"), null);
+  assert.equal(reader.scrollTop, 0);
+  wheelSpace(120);
+  assert.equal(reader.scrollTop, 0, "the gesture returning from overview cannot also scroll the text");
+  assert.equal(requests.length, 0);
+});
+
+test("zoomed-out wheel focuses before reading and physical Ctrl-wheel never scrolls a hidden answer", async () => {
+  const user = await open(fixture());
+  const reader = readerFor("observatory");
+  reader.scrollTop = 315; ui.fireEvent.scroll(reader);
+  for (let index = 0; index < 2; index++) await user.click(ui.screen.getByRole("button", { name: "Zoom out" }));
+  const node = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
+  await ui.waitFor(() => assert.notEqual(node.dataset.detail, "full"));
+  const before = node.style.transform;
+  wheelSpace(120, { ctrlKey: true });
+  await ui.waitFor(() => assert.notEqual(node.style.transform, before));
+  assert.equal(reader.scrollTop, 315);
+  await quietWheel();
+  wheelSpace(120);
+  await ui.waitFor(() => assert.equal(node.dataset.detail, "full"));
+  assert.equal(reader.scrollTop, 315, "first down movement focuses the topic without reading its previously hidden text");
+  wheelSpace(120);
+  assert.equal(reader.scrollTop, 315, "momentum from focusing cannot immediately scroll the newly visible answer");
+  await quietWheel();
+  wheelSpace(80);
+  assert.ok(reader.scrollTop > 315);
   assert.equal(requests.length, 0);
 });
 
@@ -582,6 +853,8 @@ test("scrolling and zooming during a request leaves its answer in the background
   await user.type(composer, "Explain protection from wind{Enter}");
   await ui.waitFor(() => assert.equal(requests.length, 1));
   const reader = document.querySelector<HTMLDivElement>('[data-topic="weather"] .topic-reading')!;
+  reader.scrollTop = 315;
+  ui.fireEvent.scroll(reader);
   ui.fireEvent.wheel(reader, { deltaY: -120, deltaMode: 0 });
   await user.click(ui.screen.getByRole("button", { name: "Zoom out" }));
   await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });

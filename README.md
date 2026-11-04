@@ -1,6 +1,6 @@
 # Metaphore
 
-Explore an AI conversation by topic and depth.
+Explore any part of an AI answer and return without losing your place.
 
 A useful answer often opens several directions. Following one can bury the rest
 of the discussion. Metaphore keeps those directions connected: select a passage,
@@ -15,8 +15,9 @@ ask about it, explore the detail, and return to the original answer.
   belongs in the current topic or needs its own connected space.
 - **Explore a passage.** Select text in any answer and click **Ask about this**
   beside it. The quote attaches to your question and keeps its exact source.
-- **Move between levels.** Zoom from the overview into a topic. Scroll inside it
-  to read; use the mini-map, navigation rail, or source link to return.
+- **Move between levels.** Scroll to read, then continue past the end to explore
+  a topic's children. Choose a path when there are several. Scroll up at the
+  beginning to return, with your reading position and draft preserved.
 - **Arrange your space.** Drag topics into place. Reset layout restores their
   automatic arrangement without changing the conversation.
 - **Come back later.** Chats save locally and remain available under Saved chats.

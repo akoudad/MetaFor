@@ -22,6 +22,7 @@ type SpatialWorldProps = {
   nodes: SpatialNode[];
   links: SpatialLink[];
   activeId?: string;
+  visibleIds?: string[];
   view: WorldPoint;
   reducedMotion: boolean;
   transition?: SpatialTransition | null;
@@ -290,7 +291,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       frame = null;
       if (disposed || document.visibilityState === "hidden") return;
 
-      const { nodes, links, view, reducedMotion, activeId, transition } = latest.current;
+      const { nodes, links, view, reducedMotion, activeId, visibleIds, transition } = latest.current;
+      const visibleNodeIds = visibleIds ? new Set(visibleIds) : null;
       const requested = finitePoint(view, DEFAULT_VIEW);
       const delta = previousTime ? Math.min((time - previousTime) / 1000, 0.05) : 1 / 60;
       previousTime = time;
@@ -352,6 +354,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         const { x, y, z } = entering ? reveal!.position : node.position;
         const distance = currentView.z - z;
         const visible =
+          (!visibleNodeIds || visibleNodeIds.has(node.id)) &&
           width > 0 && height > 0 &&
           Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
           distance > minimumDistance && distance < camera.far;

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Conversation, Exploration, Message, SourceReference } from "@/lib/model";
-import { getDepth, getSectionChildren } from "@/lib/model";
+import { getDepth, getChildren, getSectionChildren } from "@/lib/model";
 import AnswerBody from "./AnswerBody";
 
 type TopicCardProps = {
@@ -16,6 +16,7 @@ type TopicCardProps = {
   onHover: (id: string | null) => void;
   onSelect: (source: SourceReference) => void;
   onOpen: (id: string) => void;
+  onExplore: () => void;
   onSource: (source: SourceReference) => void;
   onRetry: () => void;
   onCancel: () => void;
@@ -28,6 +29,7 @@ export default function TopicCard(props: TopicCardProps) {
   const [outline, setOutline] = useState(false);
   const answers = item.messages.filter((message) => message.role === "assistant");
   const sections = answers.flatMap((message) => message.sections);
+  const childCount = getChildren(space, item.id).length;
 
   const scrollTo = (id: string, button: HTMLButtonElement) => {
     const article = button.closest("article");
@@ -82,6 +84,7 @@ export default function TopicCard(props: TopicCardProps) {
         <p className="original-question">{props.pendingQuestion}</p>
         {props.pendingError ? <><p>{props.pendingError}</p><button onClick={props.onRetry}>Retry</button><button onClick={props.onDismiss}>Dismiss</button></> : <><p className="thinking">Working on your question<span>…</span></p><button onClick={props.onCancel}>Stop</button></>}
       </div>}
+      {childCount > 0 && <button className="topic-explore" onClick={props.onExplore} aria-label={`Explore topics from ${item.title}`}>Explore {childCount} {childCount === 1 ? "topic" : "topics"} ↓</button>}
       {!item.messages.length && !props.pendingQuestion && <p className="empty-topic">Ask your first question below.</p>}
     </div>
   </article>;

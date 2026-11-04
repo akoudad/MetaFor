@@ -170,6 +170,23 @@ input, select { font: inherit; color: inherit; }
 .selection-action { position: fixed; z-index: 45; width: 156px; height: 36px; display: flex; align-items: center; justify-content: center; gap: 8px; background: #181818; color: #eee; border: 1px solid #444; border-radius: 7px; box-shadow: 0 4px 18px #0009; font-size: 12px; white-space: nowrap; user-select: none; }
 .selection-action:hover { background: #242424; border-color: #777; }
 .selection-action span { color: #aaa; font-size: 16px; }
+.topic-explore { display: block; width: 100%; margin-top: 24px; padding: 15px 0; border-top: 1px solid #272727; color: #aaa; font-size: 12px; text-align: left; }
+.topic-choice { position: absolute; left: 72px; right: 238px; bottom: 154px; z-index: 30; max-width: 680px; margin: 0 auto; padding: 12px 14px; border: 1px solid #303030; border-radius: 7px; background: #080808f5; }
+.topic-choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 9px; }
+.topic-choice-heading h2 { margin: 0; color: #bbb; font-size: 12px; font-weight: 400; }
+.topic-choice-heading button { color: #888; font-size: 11px; text-align: right; }
+.topic-choice > p { margin: 0 0 8px; color: #777; font-size: 11px; overflow-wrap: anywhere; }
+.topic-choice-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: min(160px, calc(100dvh - 340px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #444 transparent; padding: 3px; }
+.topic-choice-list button { flex: 1 1 180px; min-width: 0; padding: 10px 12px; text-align: left; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; color: #bbb; background: #141414; border: 1px solid #282828; border-radius: 4px; }
+.topic-choice-list button:hover { color: #fff; border-color: #666; }
+.scroll-boundary-hint { position: absolute; bottom: 147px; left: 76px; right: 238px; z-index: 25; width: fit-content; max-width: calc(100% - 320px); margin: 0 auto; padding: 5px 8px; color: #999; background: #000c; font-size: 11px; line-height: 1.5; text-align: center; pointer-events: none; }
+@media (max-width: 700px) {
+  .topic-choice { top: 110px; bottom: auto; left: 56px; right: 18px; padding: 10px; }
+  .topic-choice-list { max-height: max(70px, min(140px, calc(100dvh - 360px))); }
+  .topic-choice-heading { align-items: flex-start; gap: 8px; }
+  .topic-choice-heading button { max-width: 60%; }
+  .scroll-boundary-hint { top: 88px; bottom: auto; left: 54px; right: 18px; max-width: calc(100% - 72px); font-size: 10px; }
+}
 .composer-context { justify-content: space-between; }
 .composer-context > span { max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer textarea { height: 48px; max-height: 120px; }

@@ -15,6 +15,8 @@
 | New topics appeared without showing their relationship to the source. | Reveal the source, child, and connection before moving into the answer; show the wider shape in a navigable mini-map. | Geometry tests cover the transition and map; manual-frame component checks cover interruption, reduced motion, hidden tabs, and cleanup. Visual acceptance remains pending. |
 | Changing context for the next question could let an arriving answer clear that choice. | Treat context-checkbox changes as user interaction, preventing automatic follow. | UI regression verifies the active topic and next context choice survive the returning answer. |
 | Selecting text gave no nearby reply action. | Show Ask about this beside the highlight; attach the quote and focus the input only when chosen. | Component tests cover draft preservation, cross-section quotes without UI controls, invalid selections, dismissal, and viewport clamping. |
+| Reading and spatial zoom used different scroll meanings without a path through the discussion. | Ordinary wheel input reads a topic and follows navigation parents at its edges; multiple children open a local choice. | Gesture and UI tests cover boundary intent, momentum, parent traversal, explicit child choice, and reading-state restoration. |
+| A local child overview could replace the parent's saved reading camera. | Keep the choice transient and serialize the parent's reading view; keep hidden readers mounted. | Reload and scene tests preserve camera, draft, selected quote, and exact scroll position. |
 
 Saved-chat tests cover returning to unfinished drafts, keeping legacy samples
 without opening them by default, failed-save recovery, and resetting placement
