@@ -10,7 +10,6 @@ type TopicCardProps = {
   selection: SourceReference | null;
   pendingQuestion?: string;
   pendingError?: string;
-  canReroute?: string;
   readingRef: (element: HTMLDivElement | null) => void;
   onScroll: (top: number) => void;
   onFocus: () => void;
@@ -18,7 +17,6 @@ type TopicCardProps = {
   onSelect: (source: SourceReference) => void;
   onOpen: (id: string) => void;
   onSource: (source: SourceReference) => void;
-  onReroute: () => void;
   onRetry: () => void;
   onCancel: () => void;
 };
@@ -42,11 +40,8 @@ export default function TopicCard(props: TopicCardProps) {
   };
 
   const metadata = (message: Message) => <div className="answer-meta" data-no-selection>
-    {message.routing && <span title={message.routing.reason}>{message.routing.decision === "branch" ? "Opened a branch" : "Continued here"}</span>}
-    {props.canReroute === message.requestId && <button onClick={props.onReroute}>{item.parentId && item.messages.length === 2 ? "Keep in parent" : "Open as branch"}</button>}
     {message.context && <button onClick={() => setContextMessage(contextMessage === message.id ? null : message.id)}>Context</button>}
     {contextMessage === message.id && message.context && <div className="context-details">
-      <p>{message.routing?.reason}</p>
       <p>Included: {message.context.fullIds.map((id) => space.explorations[id]?.title ?? id).join(", ") || "Your question"}.</p>
       {message.context.summaryIds.length > 0 && <p>Summaries: {message.context.summaryIds.map((id) => space.explorations[id]?.title ?? id).join(", ")}.</p>}
       {message.context.truncated && <p>Older material was shortened to fit this request.</p>}
@@ -68,6 +63,7 @@ export default function TopicCard(props: TopicCardProps) {
         {outline && <div>{sections.map((section) => <button key={section.id} onClick={(event) => scrollTo(section.id, event.currentTarget)}>{section.title || "Answer"}</button>)}</div>}
       </div>}
       {item.source && <blockquote className="source-quote" data-no-selection><button onClick={() => props.onSource(item.source!)}>From {space.explorations[item.source.explorationId]?.title} ↗</button>{item.source.quote && <p>{item.source.quote}</p>}</blockquote>}
+      {!item.source && item.parentId && <button className="branch-link" onClick={() => props.onOpen(item.parentId!)}>Back to {space.explorations[item.parentId]?.title} <span>↗</span></button>}
       {item.messages.map((message) => message.role === "user" ? <div key={message.id}>
         {message.source?.quote && message.source.quote !== item.source?.quote && <blockquote className="source-quote"><button onClick={() => props.onSource(message.source!)}>Selected passage ↗</button><p>{message.source.quote}</p></blockquote>}
         <p className="original-question">{message.sections.map((section) => section.body).join("\n\n")}</p>

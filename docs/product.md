@@ -8,21 +8,25 @@ connections, independently of where topics appear on screen.
 
 ## Current experience
 
-1. Enter a black space and type beside the orb. Receive a sectioned, live answer
-   from a Meta model. A labeled, prewritten sample is available separately.
-2. Select a passage or a section and ask about it. **Auto** chooses a continuation
-   for a clarification or a branch for a separate exploration. Selection alone
-   does not force a branch. Choose **Continue here** or **New branch** to override.
-3. Follow a branch while its source remains intact. Arrows retain the origin;
-   the latest answer's placement can be changed before continuing the discussion.
+1. Enter an empty black space and type beside the orb. Receive a sectioned, live
+   answer from a Meta model. No prewritten job conversation opens by default.
+2. Select a passage or a section and ask about it. The model keeps a clarification
+   in the current topic or opens a connected topic for a separate exploration.
+   Placement is automatic; there are no branch/continue controls to manage.
+3. Follow the new topic while its source remains intact. A selected passage keeps
+   its exact source. An unselected topic change retains its parent connection
+   without claiming it came from an arbitrary section.
 4. Pull back from full answers to summaries and titles. Topics stay in the same
    space. Focus a topic, drag it by its handle, or jump through the navigation
-   rail. Longer topics have an **In this topic** section outline.
+   rail. **Reset layout** restores the automatic arrangement. Longer topics have
+   an **In this topic** section outline.
 5. Return through the path or `Esc`. Drafts, selected passages, reading positions,
    and camera views are remembered. A pending answer remains attached to the
    question's original topic, even when you navigate elsewhere.
-6. Resume from the local saved library, or export/import an `.ingx` file. Starting
-   or importing another conversation keeps existing saved spaces.
+6. Use **New chat** for a different conversation and **Saved chats** to return.
+   Existing content and unfinished drafts are retained. Export/import `.ingx`
+   files to carry conversations between browsers. Older saved samples remain
+   available in the library but are not restored automatically at startup.
 
 Scroll over space to zoom and inside an answer to read. Drag empty space to pan;
 click a topic to focus. Pinch and `+` / `−` zoom; `0` shows the overview. The left
@@ -45,9 +49,11 @@ encrypted backups.
 
 ## Release checks
 
-The localhost backend completed three live requests: an initial answer, an
-automatic branch from a selected passage, and a forced continuation. Thirteen React DOM integration tests cover selection, placement, navigation,
-and recovery. Actual browser visuals and gestures remain unverified because
+The revised localhost backend completed three live requests using automatic
+placement throughout: an initial answer, a deeper topic from a selected passage,
+then a short clarification in that topic. React DOM integration
+tests cover selection, placement, navigation, and recovery. Actual browser
+visuals and gestures remain unverified because
 the automation bridge was unavailable. No public deployment has been verified.
 
 See the [acceptance checklist](hackathon.md) and [demo](demo.md).

@@ -16,6 +16,12 @@ Topics remain mounted while the camera moves. Projected scale selects titles,
 summaries, or full answers. The app owns layout, draggable positions, source
 arrows, the navigation rail, and section outlines.
 
+Automatic positions use stable horizontal lanes within depth rows. Spacing
+accounts for perspective to keep fitted overviews from overlapping cards.
+Manual positions are applied separately from conversation validation so dragging
+does not repeatedly parse the whole conversation. Reset layout clears those
+overrides and reframes the overview, preserving text and saved reading state.
+
 ```mermaid
 flowchart LR
     UI[Spatial interface] <--> State[Conversation and view state]
@@ -49,19 +55,24 @@ selections across its sections. App-assigned IDs preserve existing answer text.
 
 1. Capture the question, target, selection, placement mode, and explicitly included
    topics under a request ID. Navigation does not change that target.
-2. Validate the request on the server. Build context from the original question,
-   selected passage, current topic, included topics, and ancestors, then add other
-   topic summaries within a 60,000-character budget. This is a character budget,
-   not a token-count guarantee. Stored history remains intact.
+2. Validate the request on the server. Preserve the current selection and original
+   question. Reserve up to 20,000 characters for at most 12 genuine source
+   anchors, nearest topic first, before adding recent message excerpts and other
+   topic summaries. This keeps older origins available after the parent grows.
+   The total budget is 60,000 characters, not a token-count guarantee. Shortened
+   or omitted anchors are flagged; stored history remains intact.
 3. Ask `muse-spark-1.3` for structured sections, placement advice, and optional
-   related-topic suggestions. Validate output before applying it. Forced placement
-   wins; the first answer continues the empty root.
+   related-topic suggestions. Validate output before applying it. The interface
+   always requests automatic placement; the first answer continues the empty
+   root. Explicit API modes remain supported for file/tool compatibility.
 4. Append immutably with app-assigned IDs. Applying an already completed request
    ID does not duplicate its answer. A network retry can still incur another model
-   call. The latest placement can be changed locally without regenerating text.
+   call. A selected passage retains its exact source. Without a selection, a
+   separate topic connects to its parent without inventing a section source.
+   Continued answers refresh the topic summary while retaining its stable title.
 
 Context records identify topics sent with message excerpts versus summaries and
-flag truncation. The `fullIds` field can include shortened message excerpts;
+flag truncation. The `fullIds` field can include shortened excerpts or source anchors;
 it does not guarantee every historical word was sent. Accepted links are not
 automatically full context: the user chooses topics to include.
 

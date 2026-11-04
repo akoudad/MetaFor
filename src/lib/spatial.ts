@@ -18,6 +18,11 @@ export const MAX_DISTANCE = 12000;
 
 const tangent = Math.tan(FIELD_OF_VIEW * Math.PI / 360);
 const framing = 0.86;
+const depthStep = 1050;
+const laneStep = CARD_WIDTH + 280;
+// A depth row must clear the card height plus the perspective shift caused by
+// moving one Z plane. This remains separated anywhere in a fitted viewport.
+const rowStep = Math.ceil((CARD_HEIGHT + depthStep * tangent + 240) / 40) * 40;
 
 function finite(value: number, fallback: number) {
   return Number.isFinite(value) ? value : fallback;
@@ -33,61 +38,41 @@ function aspect(width: number, height: number) {
   return bounded(width, 1280) / bounded(height, 800);
 }
 
-/** Fixed sibling slots preserve existing positions when records are appended. */
+/** Reserve the nearest free lane in each depth row, preserving earlier nodes. */
 export function layoutSpace(
   space: Conversation,
   overrides: Record<string, SpatialPoint> = {},
 ): SpatialNode[] {
   validateConversation(space);
-  const children = new Map<string, string[]>();
-  for (const exploration of Object.values(space.explorations)) {
-    if (exploration.parentId === null) continue;
-    const siblings = children.get(exploration.parentId) ?? [];
-    siblings.push(exploration.id);
-    children.set(exploration.parentId, siblings);
-  }
-
   const nodes: SpatialNode[] = [];
-  const levels = new Map<number, SpatialPoint[]>();
-  const placed = new Map<string, { position: SpatialPoint; depth: number; direction: number }>();
-  const round = (value: number) => Math.round(value * 1000) / 1000;
-  const childAngles = [0, -Math.PI / 6, Math.PI / 6, -Math.PI / 3, Math.PI / 3];
+  const levels = new Map<number, Set<number>>();
+  const placed = new Map<string, { position: SpatialPoint; depth: number; lane: number }>();
 
-  const place = (id: string): { position: SpatialPoint; depth: number; direction: number } => {
+  const place = (id: string): { position: SpatialPoint; depth: number; lane: number } => {
     const existing = placed.get(id);
     if (existing) return existing;
     const exploration = space.explorations[id];
 
     if (exploration.parentId === null) {
-      const root = { position: { x: 0, y: 0, z: 0 }, depth: 0, direction: 3 * Math.PI / 4 };
+      const root = { position: { x: 0, y: 0, z: 0 }, depth: 0, lane: 0 };
       placed.set(id, root);
       nodes.push({ id, position: root.position });
       return root;
     }
 
     const parent = place(exploration.parentId);
-    const index = (children.get(exploration.parentId) ?? []).indexOf(id);
-    const rootChild = exploration.parentId === space.rootId;
-    const angle = rootChild
-      ? 3 * Math.PI / 4 - (index % 4) * Math.PI / 2
-      : parent.direction + childAngles[index % childAngles.length];
-    let distance = 1 + Math.floor(index / (rootChild ? 4 : childAngles.length));
     const depth = parent.depth + 1;
-    const occupied = levels.get(depth) ?? [];
+    const occupied = levels.get(depth) ?? new Set<number>();
     levels.set(depth, occupied);
-    let position: SpatialPoint;
-
-    do {
-      position = {
-        x: round(parent.position.x + Math.cos(angle) * 1250 * Math.SQRT2 * distance),
-        y: round(parent.position.y + Math.sin(angle) * 650 * Math.SQRT2 * distance),
-        z: -depth * 1050,
-      };
-      distance *= 1.15;
-    } while (occupied.some((peer) => Math.abs(peer.x - position.x) < CARD_WIDTH + 80 && Math.abs(peer.y - position.y) < CARD_HEIGHT + 80));
-
-    occupied.push(position);
-    const result = { position, depth, direction: angle };
+    let lane = parent.lane;
+    let attempt = 0;
+    while (occupied.has(lane)) {
+      attempt += 1;
+      lane = parent.lane + (attempt % 2 ? -(attempt + 1) / 2 : attempt / 2);
+    }
+    const position = { x: lane * laneStep, y: -depth * rowStep, z: -depth * depthStep };
+    occupied.add(lane);
+    const result = { position, depth, lane };
     placed.set(id, result);
     nodes.push({ id, position });
     return result;
@@ -95,6 +80,14 @@ export function layoutSpace(
 
   place(space.rootId);
   for (const id of Object.keys(space.explorations)) place(id);
+  return applyPositionOverrides(nodes, overrides);
+}
+
+/** Apply manual placements without revalidating conversation text on every drag. */
+export function applyPositionOverrides(
+  nodes: SpatialNode[],
+  overrides: Record<string, SpatialPoint>,
+): SpatialNode[] {
   return nodes.map((node) => {
     const override = overrides[node.id];
     return override && [override.x, override.y, override.z].every(Number.isFinite)

@@ -5,21 +5,19 @@ import type { ChangeEvent, FormEvent, KeyboardEvent, PointerEvent } from "react"
 import SpatialWorld from "./SpatialWorld";
 import NavigationRail from "./NavigationRail";
 import TopicCard from "./TopicCard";
-import { getDepth, getPath, validateSourceReference } from "@/lib/model";
-import type { Conversation, SourceReference } from "@/lib/model";
-import { createSampleConversation } from "@/lib/sample";
+import { getDepth, getPath } from "@/lib/model";
+import type { SourceReference } from "@/lib/model";
 import { createConversation, applyAnswer } from "@/lib/session";
 import { loadSnapshot, saveSnapshot, backupSnapshot, listSnapshots, serializeSnapshot, parseSnapshot } from "@/lib/storage";
 import type { Snapshot } from "@/lib/storage";
-import type { AnswerRequest, AnswerResult, ModelStatus, RoutingMode } from "@/lib/contracts";
+import type { AnswerRequest, AnswerResult, ModelStatus } from "@/lib/contracts";
 import { normalizeText, messageText } from "@/lib/markdown";
-import { fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
+import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, applyPositionOverrides, fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
 import type { SpatialPoint } from "@/lib/spatial";
 
 type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number };
 type Pointer = { x: number; y: number };
 type Pending = { request: AnswerRequest; error?: string; navigation: number };
-type LastAnswer = { before: Conversation; request: AnswerRequest; result: AnswerResult };
 const INITIAL_VIEW = { x: 0, y: 0, z: 900 };
 
 export default function ConversationSpace() {
@@ -31,20 +29,20 @@ export default function ConversationSpace() {
   const [activeId, setActiveId] = useState(space.rootId);
   const [view, setView] = useState<SpatialPoint>(INITIAL_VIEW);
   const [positions, setPositions] = useState<Record<string, SpatialPoint>>({});
-  const nodes = useMemo(() => layoutSpace(space, positions), [space, positions]);
+  const baseNodes = useMemo(() => layoutSpace(space), [space]);
+  const nodes = useMemo(() => applyPositionOverrides(baseNodes, positions), [baseNodes, positions]);
   const [overview, setOverview] = useState(false);
   const [draft, setDraft] = useState("");
   const [selection, setSelection] = useState<SourceReference | null>(null);
-  const [mode, setMode] = useState<RoutingMode>("auto");
   const [includeIds, setIncludeIds] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [help, setHelp] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [savedChats, setSavedChats] = useState(false);
   const [connections, setConnections] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [lastAnswer, setLastAnswer] = useState<LastAnswer | null>(null);
   const [unreadId, setUnreadId] = useState<string | null>(null);
   const [unreadMessageId, setUnreadMessageId] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
@@ -67,6 +65,8 @@ export default function ConversationSpace() {
   const moving = useRef<{ id: string; point: SpatialPoint; pointer: Pointer } | null>(null);
   const wheelAnchor = useRef<{ point: SpatialPoint; id: string; time: number } | null>(null);
   const viewNow = useRef(view);
+  const renderedView = useRef(view);
+  const rememberRenderedView = useCallback((current: SpatialPoint) => { renderedView.current = current; }, []);
   const activeNow = useRef(activeId);
   const spaceNow = useRef(space);
   const abort = useRef<AbortController | null>(null);
@@ -98,22 +98,40 @@ export default function ConversationSpace() {
   const restore = (next: Snapshot) => {
     abort.current?.abort();
     navigation.current += 1;
-    setPending(null); setLastAnswer(null); setUnreadId(null); setUnreadMessageId(null);
+    setPending(null); setUnreadId(null); setUnreadMessageId(null);
     saved.current = next.view.places;
     history.current = next.view.history;
+    let camera = next.view.view;
+    if (next.view.started && !next.view.overview && !Object.hasOwn(next.view.positions ?? {}, next.view.activeId)) {
+      const point = layoutSpace(next.conversation).find((node) => node.id === next.view.activeId)!.position;
+      const { width, height } = size();
+      const distance = camera.z - point.z;
+      const scale = height / (2 * Math.tan(FIELD_OF_VIEW * Math.PI / 360) * distance);
+      const x = width / 2 + (point.x - camera.x) * scale;
+      const y = height / 2 - (point.y - camera.y) * scale;
+      // Older automatic layouts used different coordinates. Keep valid saved
+      // views; recover only when their active card would no longer be visible.
+      if (distance <= 0 || x + CARD_WIDTH * scale / 2 < 0 || x - CARD_WIDTH * scale / 2 > width || y + CARD_HEIGHT * scale / 2 < 0 || y - CARD_HEIGHT * scale / 2 > height) {
+        camera = focusView(point, width, height);
+        const place = saved.current[next.view.activeId];
+        if (place) saved.current = { ...saved.current, [next.view.activeId]: { ...place, view: camera } };
+      }
+    }
     spaceNow.current = next.conversation; setSpace(next.conversation);
     activeNow.current = next.view.activeId; setActiveId(next.view.activeId);
-    setCamera(next.view.view); setOverview(next.view.overview); setStarted(next.view.started);
+    setCamera(camera); setOverview(next.view.overview); setStarted(next.view.started);
     setPositions(next.view.positions ?? {});
     setDraft(next.view.places[next.view.activeId]?.draft ?? "");
     setSelection(next.view.places[next.view.activeId]?.selection ?? null);
-    setMode("auto"); setIncludeIds([]); setMenu(false); setConnections(false); setNotice("");
+    setIncludeIds([]); setMenu(false); setSavedChats(false); setConnections(false); setNotice("");
     hover.current = null; wheelAnchor.current = null;
   };
 
   useEffect(() => {
     let cancelled = false;
-    loadSnapshot().then((value) => { if (!cancelled && value) restore(value); }).catch((error) => { if (!cancelled) setNotice(error instanceof Error ? error.message : "Could not restore the saved conversation."); }).finally(() => { if (!cancelled) setReady(true); });
+    // Keep older demo snapshots in the library, but never present one as a new
+    // user's conversation. Real saved chats still resume normally.
+    loadSnapshot().then((value) => { if (!cancelled && value && value.conversation.kind !== "sample") restore(value); }).catch((error) => { if (!cancelled) setNotice(error instanceof Error ? error.message : "Could not restore the saved conversation."); }).finally(() => { if (!cancelled) setReady(true); });
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(query.matches);
     update(); query.addEventListener("change", update);
@@ -151,10 +169,15 @@ export default function ConversationSpace() {
     return () => { window.removeEventListener("pagehide", save); document.removeEventListener("visibilitychange", onVisibility); };
   }, [ready, started, draft]);
 
-  useEffect(() => { if (menu) listSnapshots().then(setLibrary).catch(() => setNotice("Could not read saved conversations. Your current conversation is still open.")); }, [menu]);
+  useEffect(() => {
+    if (!savedChats) return;
+    let cancelled = false;
+    listSnapshots().then((items) => { if (!cancelled) setLibrary(items); }).catch(() => { if (!cancelled) setNotice("Could not read saved chats. Your current chat is still open."); });
+    return () => { cancelled = true; };
+  }, [savedChats, saveState]);
 
   const focus = useCallback((id: string) => {
-    if (!space.explorations[id]) return;
+    if (switchingNow.current || !space.explorations[id]) return;
     remember(); navigation.current += 1;
     if (id !== activeId) pushHistory(activeId);
     const previous = saved.current[id];
@@ -162,12 +185,12 @@ export default function ConversationSpace() {
     setCamera(focusView(pointFor(id), width, height));
     activeNow.current = id; setActiveId(id);
     setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null);
-    setMode("auto"); setIncludeIds([]); setStarted(true); setOverview(false); setNotice(""); setUnreadId(null);
+    setIncludeIds([]); setStarted(true); setOverview(false); setNotice(""); setUnreadId(null);
     hover.current = id; wheelAnchor.current = null;
   }, [activeId, pointFor, remember, space]);
 
   const showOverview = useCallback(() => {
-    if (overview) return;
+    if (switchingNow.current || overview) return;
     remember(); navigation.current += 1;
     const { width, height } = size();
     setCamera(fitOverview(nodes, width, height)); setStarted(true); setOverview(true);
@@ -175,6 +198,7 @@ export default function ConversationSpace() {
   }, [nodes, overview, remember]);
 
   const back = useCallback(() => {
+    if (switchingNow.current) return;
     navigation.current += 1;
     if (overview) { setCamera(saved.current[activeId]?.view ?? focusView(pointFor(activeId), size().width, size().height)); setOverview(false); return; }
     const id = history.current.pop() ?? active.parentId;
@@ -183,18 +207,19 @@ export default function ConversationSpace() {
     const previous = saved.current[id];
     activeNow.current = id; setActiveId(id);
     setCamera(previous?.view ?? focusView(pointFor(id), size().width, size().height));
-    setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setMode("auto"); setIncludeIds([]); setOverview(false); setNotice("");
+    setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setIncludeIds([]); setOverview(false); setNotice("");
     hover.current = null; wheelAnchor.current = null;
   }, [active.parentId, activeId, overview, pointFor, remember, showOverview, space]);
 
   const activate = useCallback((id: string) => {
-    if (id === activeId || !space.explorations[id]) return;
+    if (switchingNow.current || id === activeId || !space.explorations[id]) return;
     remember(); navigation.current += 1; pushHistory(activeId);
     activeNow.current = id; setActiveId(id);
-    setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setMode("auto"); setIncludeIds([]); setNotice("");
+    setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setIncludeIds([]); setNotice("");
   }, [activeId, remember, space]);
 
   const zoom = useCallback((delta: number, anchor?: SpatialPoint, anchorId?: string) => {
+    if (switchingNow.current) return;
     navigation.current += 1;
     const id = anchorId ?? hover.current ?? activeId;
     const point = anchor ?? pointFor(id);
@@ -237,7 +262,7 @@ export default function ConversationSpace() {
       const target = event.target as HTMLElement;
       if (event.defaultPrevented || switchingNow.current) return;
       if (event.key === "Escape") {
-        if (help || menu || connections || showAccess) { setHelp(false); setMenu(false); setConnections(false); setShowAccess(false); }
+        if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); }
         else if (started) back();
         return;
       }
@@ -250,13 +275,15 @@ export default function ConversationSpace() {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [back, help, menu, connections, showAccess, showOverview, started, zoom]);
+  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom]);
 
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (switchingNow.current) return;
     const target = event.target as HTMLElement;
     const moveId = target.closest<HTMLElement>("[data-move-topic]")?.dataset.moveTopic;
     if (event.button !== 0 || (!moveId && target.closest("button, textarea, .topic-reading"))) return;
     navigation.current += 1;
+    if (!pointers.current.size) setCamera({ ...renderedView.current });
     if (moveId) { event.preventDefault(); moving.current = { id: moveId, point: pointFor(moveId), pointer: { x: event.clientX, y: event.clientY } }; }
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     event.currentTarget.setPointerCapture(event.pointerId); setDragging(true);
@@ -269,7 +296,7 @@ export default function ConversationSpace() {
     const focal = size().height / (2 * Math.tan(25 * Math.PI / 180));
     if (moving.current) {
       const { id, point, pointer } = moving.current;
-      const scale = Math.max(0.05, focal / Math.max(100, viewNow.current.z - point.z));
+      const scale = Math.max(0.05, focal / Math.max(100, renderedView.current.z - point.z));
       setPositions((current) => ({ ...current, [id]: { x: Math.max(-1e6, Math.min(1e6, point.x + (event.clientX - pointer.x) / scale)), y: Math.max(-1e6, Math.min(1e6, point.y - (event.clientY - pointer.y) / scale)), z: point.z } }));
     } else if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
@@ -278,11 +305,12 @@ export default function ConversationSpace() {
       pinchDistance.current = distance;
     } else {
       const current = viewNow.current;
-      const scale = Math.max(0.1, focal / Math.max(100, current.z - pointFor(activeId).z));
+      const scale = Math.max(0.1, focal / Math.max(100, renderedView.current.z - pointFor(activeId).z));
       setCamera({ ...current, x: current.x - (event.clientX - previous.x) / scale, y: current.y + (event.clientY - previous.y) / scale });
     }
   };
   const captureSelection = () => {
+    if (switchingNow.current) return;
     const chosen = window.getSelection();
     if (!chosen || chosen.isCollapsed || !chosen.rangeCount) return;
     const range = chosen.getRangeAt(0);
@@ -299,7 +327,7 @@ export default function ConversationSpace() {
     if (!message || !normalizeText(messageText(message)).includes(quote)) { setNotice("That selection crosses content outside the answer. Select the passage again."); return; }
     activate(id); navigation.current += 1;
     setSelection({ explorationId: id, messageId: message.id, sectionId: start.dataset.sectionId!, ...(end !== start ? { endSectionId: end.dataset.sectionId! } : {}), quote });
-    setMode("auto"); setNotice("");
+    setNotice("");
   };
   const pointerUp = (event: PointerEvent<HTMLDivElement>) => {
     const wasDragging = pointers.current.has(event.pointerId);
@@ -329,11 +357,11 @@ export default function ConversationSpace() {
         if (activeNow.current === task.request.activeId) setDraft((current) => current.trim() === task.request.question ? "" : current);
       }
       spaceNow.current = applied.conversation; setSpace(applied.conversation);
-      setLastAnswer({ before, request: task.request, result }); setPending(null);
+      setPending(null);
       if (activeNow.current === task.request.activeId && navigation.current === task.navigation) {
         if (applied.destinationId !== task.request.activeId) pushHistory(task.request.activeId);
         activeNow.current = applied.destinationId; setActiveId(applied.destinationId);
-        setDraft(saved.current[applied.destinationId]?.draft ?? ""); setSelection(null); setMode("auto"); setIncludeIds([]); setOverview(false);
+        setDraft(saved.current[applied.destinationId]?.draft ?? ""); setSelection(null); setIncludeIds([]); setOverview(false);
         const destination = layoutSpace(applied.conversation, positions).find((node) => node.id === applied.destinationId)!;
         setCamera(focusView(destination.position, size().width, size().height));
         requestAnimationFrame(() => {
@@ -358,9 +386,9 @@ export default function ConversationSpace() {
     if (switchingNow.current || !draft.trim() || (pending && !pending.error) || !ready) return;
     const question = draft.trim();
     if (question.length > 8000) { setNotice("Keep the question below 8,000 characters."); return; }
-    remember(); setLastAnswer(null);
+    remember();
     const originId = selection?.explorationId ?? activeId;
-    const request: AnswerRequest = { requestId: crypto.randomUUID(), conversation: space, activeId: originId, question, selection, mode, includeIds };
+    const request: AnswerRequest = { requestId: crypto.randomUUID(), conversation: space, activeId: originId, question, selection, mode: "auto", includeIds };
     setStarted(true);
     if (!started) setCamera(focusView(pointFor(originId), size().width, size().height));
     const task = { request, navigation: navigation.current };
@@ -372,47 +400,31 @@ export default function ConversationSpace() {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
   };
 
-  const reroute = () => {
-    if (!lastAnswer || pending) return;
-    remember();
-    const decision = lastAnswer.result.decision === "branch" ? "continue" : "branch";
-    if (decision === "continue" && draft.trim()) { setNotice("Send or clear this draft before moving the answer."); return; }
-    try {
-      const result = { ...lastAnswer.result, decision, reason: "Placement chosen by you." } as AnswerResult;
-      const applied = applyAnswer(lastAnswer.before, lastAnswer.request, result);
-      const valid = new Set(Object.keys(applied.conversation.explorations));
-      if (Object.entries(saved.current).some(([id, place]) => !valid.has(id) && place.draft.trim())) {
-        throw new Error("That branch has an unfinished draft. Send or clear it before moving its answer.");
-      }
-      saved.current = Object.fromEntries(Object.entries(saved.current).filter(([id]) => valid.has(id)).map(([id, place]) => {
-        if (place.selection) {
-          try { validateSourceReference(applied.conversation, place.selection); }
-          catch { return [id, { ...place, selection: null }]; }
-        }
-        return [id, place];
-      }));
-      history.current = history.current.filter((id) => valid.has(id));
-      setPositions((current) => Object.fromEntries(Object.entries(current).filter(([id]) => valid.has(id))));
-      spaceNow.current = applied.conversation; setSpace(applied.conversation); setLastAnswer({ ...lastAnswer, result });
-      activeNow.current = applied.destinationId; setActiveId(applied.destinationId); setDraft(saved.current[applied.destinationId]?.draft ?? ""); setSelection(null); setOverview(false);
-      const destination = layoutSpace(applied.conversation, positions).find((node) => node.id === applied.destinationId)!;
-      setCamera(focusView(destination.position, size().width, size().height));
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not change this answer's placement."); }
+  const resetLayout = () => {
+    if (switchingNow.current || !started) return;
+    remember(); navigation.current += 1;
+    const { width, height } = size();
+    for (const node of baseNodes) {
+      const place = saved.current[node.id];
+      if (place) saved.current[node.id] = { ...place, view: focusView(node.position, width, height) };
+    }
+    setPositions({}); setCamera(fitOverview(baseNodes, width, height)); setOverview(true);
+    hover.current = null; wheelAnchor.current = null; setMenu(false);
   };
 
   const keepCurrent = async () => { if (started || draft) await saveSnapshot(snapshot()); };
-  const openFresh = async (sample = false) => {
-    if (switchingNow.current || (pending && !pending.error)) return;
+  const openFresh = async () => {
+    if (!ready || switchingNow.current || (pending && !pending.error)) return;
     switchingNow.current = true; setSwitching(true);
     try {
       await keepCurrent();
-      const conversation = sample ? { ...createSampleConversation(), id: `sample-${crypto.randomUUID()}`, kind: "sample" as const } : createConversation();
-      restore({ format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation, view: { activeId: conversation.rootId, view: focusView({ x: 0, y: 0, z: 0 }, size().width, size().height), overview: false, started: sample, places: {}, history: [], positions: {} } });
+      const conversation = createConversation();
+      restore({ format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation, view: { activeId: conversation.rootId, view: focusView({ x: 0, y: 0, z: 0 }, size().width, size().height), overview: false, started: false, places: {}, history: [], positions: {} } });
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not save this conversation before switching."); }
     finally { switchingNow.current = false; setSwitching(false); }
   };
   const openSaved = async (id: string) => {
-    if (switchingNow.current || (pending && !pending.error)) return;
+    if (!ready || switchingNow.current || (pending && !pending.error)) return;
     switchingNow.current = true; setSwitching(true);
     try { await keepCurrent(); const value = await loadSnapshot(id); if (!value) throw new Error("That saved conversation is no longer available."); restore(value); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Could not open this conversation."); }
@@ -443,7 +455,7 @@ export default function ConversationSpace() {
   };
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = "";
-    if (!file || switchingNow.current || (pending && !pending.error)) return;
+    if (!file || !ready || switchingNow.current || (pending && !pending.error)) return;
     switchingNow.current = true; setSwitching(true);
     try {
       if (file.size > 2 * 1024 * 1024) throw new Error("Choose an .ingx file smaller than 2 MB.");
@@ -455,13 +467,17 @@ export default function ConversationSpace() {
     finally { switchingNow.current = false; setSwitching(false); }
   };
   const acceptConnection = (id: string) => {
-    setSpace((current) => ({ ...current, connections: current.connections?.map((link) => link.id === id ? { ...link, status: "accepted" } : link) })); setLastAnswer(null);
+    if (switchingNow.current) return;
+    setSpace((current) => ({ ...current, connections: current.connections?.map((link) => link.id === id ? { ...link, status: "accepted" } : link) }));
   };
-  const dismissConnection = (id: string) => { setSpace((current) => ({ ...current, connections: current.connections?.filter((link) => link.id !== id) })); setLastAnswer(null); };
-  const chooseSection = (source: SourceReference) => { navigation.current += 1; if (source.explorationId !== activeId) activate(source.explorationId); setSelection(source); setMode("auto"); composer.current?.focus(); };
+  const dismissConnection = (id: string) => { if (switchingNow.current) return; setSpace((current) => ({ ...current, connections: current.connections?.filter((link) => link.id !== id) })); };
+  const chooseSection = (source: SourceReference) => { if (switchingNow.current) return; navigation.current += 1; if (source.explorationId !== activeId) activate(source.explorationId); setSelection(source); composer.current?.focus(); };
   const openSource = (source: SourceReference) => {
+    if (switchingNow.current) return;
+    const conversationId = space.id;
     focus(source.explorationId);
     requestAnimationFrame(() => {
+      if (switchingNow.current || spaceNow.current.id !== conversationId || activeNow.current !== source.explorationId) return;
       const reader = readers.current.get(source.explorationId);
       const section = reader?.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(source.sectionId)}"]`);
       if (reader && section) {
@@ -474,30 +490,32 @@ export default function ConversationSpace() {
   const selectedMessage = selection && space.explorations[selection.explorationId]?.messages.find((message) => message.id === selection.messageId);
   const selectionLabel = selection?.quote ?? selectedMessage?.sections.find((section) => section.id === selection?.sectionId)?.title;
   const suggestions = (space.connections ?? []).filter((link) => link.from === activeId || link.to === activeId);
-  const canReroute = lastAnswer && lastAnswer.before.explorations[lastAnswer.request.activeId]?.messages.some((message) => message.role === "assistant") ? lastAnswer.request.requestId : undefined;
 
   return <main className="space" aria-busy={switching}>
     <header className="topbar">
       <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metaphore</button>
-      <button className="sample-label" onClick={() => { void refreshStatus(); setMenu(true); }}>{space.kind === "sample" ? "sample conversation" : statusError ? "connection unavailable" : modelStatus?.configured ? "Meta connected" : "connect your model"}</button>
       <div className="top-actions">
-        {started && <button onClick={showOverview}>Overview <span>0</span></button>}
-        {started && <button onClick={() => setConnections(!connections)} aria-expanded={connections}>Connections{suggestions.filter((link) => link.status === "suggested").length > 0 && <span>{suggestions.filter((link) => link.status === "suggested").length}</span>}</button>}
-        <button onClick={() => setHelp(!help)} aria-label="Navigation help">?</button>
-        <button onClick={() => setMenu(!menu)} aria-label="Conversation menu" aria-expanded={menu}>⋯</button>
+        <button onClick={() => void openFresh()} disabled={!ready || switching || Boolean(pending && !pending.error)}>New chat</button>
+        <button onClick={() => { setSavedChats(!savedChats); setMenu(false); }} disabled={!ready || switching} aria-expanded={savedChats}>Saved chats</button>
+        {started && <button onClick={showOverview} aria-label="Overview" title="Overview · 0">⤢</button>}
+        <button onClick={() => { setMenu(!menu); setSavedChats(false); }} aria-label="Conversation menu" aria-expanded={menu}>⋯</button>
       </div>
     </header>
     {started && <nav className="breadcrumbs" aria-label="Conversation path"><button onClick={back} aria-label="Return to previous view">←</button>{path.map((item, index) => <span key={item.id}>{index > 0 && <i>/</i>}<button onClick={() => focus(item.id)} aria-current={item.id === activeId ? "page" : undefined}>{item.title}</button></span>)}</nav>}
-    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll over space to zoom. Scroll inside an answer to read.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select any passage, then ask about it below. Auto lets the model choose a branch or continuation.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Pinch or + / − to zoom. Esc returns. 0 shows everything.</p></aside>}
+    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll over space to zoom. Scroll inside an answer to read.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select any passage, then ask about it below. Related ideas stay connected as your conversation grows.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Pinch or + / − to zoom. Esc returns. 0 shows everything.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
+    {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
+      <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
+      <p className="panel-explainer">Saved in this browser.</p>
+      <div className="saved-spaces">{library.length ? library.map((item) => <button key={item.id} onClick={() => void openSaved(item.id)} disabled={switching || Boolean(pending && !pending.error)} aria-current={item.id === space.id ? "page" : undefined}>{item.title}<small>{new Date(item.savedAt).toLocaleDateString()}</small></button>) : <p>No saved chats yet.</p>}</div>
+    </aside>}
     {menu && <aside className="space-menu" aria-label="Conversation actions">
-      <button onClick={() => void openFresh()} disabled={Boolean(pending && !pending.error)}>New conversation <span>↗</span></button>
+      {started && <button onClick={() => { setConnections(!connections); setMenu(false); }} aria-expanded={connections}>Connections{suggestions.filter((link) => link.status === "suggested").length > 0 && <span>{suggestions.filter((link) => link.status === "suggested").length}</span>}</button>}
+      <button onClick={() => { setHelp(!help); setMenu(false); }} aria-label="Navigation help">Navigation help</button>
+      {started && <button onClick={resetLayout}>Reset layout</button>}
+      <div className="menu-rule" />
       <button onClick={() => fileInput.current?.click()} disabled={Boolean(pending && !pending.error)}>Open .ingx</button>
       <button onClick={exportFile} disabled={!started && !draft}>Export .ingx</button>
-      <button onClick={() => void openFresh(true)} disabled={Boolean(pending && !pending.error)}>Explore the sample</button>
-      <div className="menu-rule" />
-      <p className="menu-caption">Saved on this device</p>
-      <div className="saved-spaces">{library.length ? library.map((item) => <button key={item.id} onClick={() => void openSaved(item.id)} disabled={Boolean(pending && !pending.error)} aria-current={item.id === space.id ? "page" : undefined}>{item.title}<small>{new Date(item.savedAt).toLocaleDateString()}</small></button>) : <p>Your conversations will appear here.</p>}</div>
-      <div className="menu-rule" /><p className="model-status">{modelStatus?.configured ? `${modelStatus.model} connected` : "Add MODEL_API_KEY in .env.local to connect Meta."}</p><button onClick={() => void refreshStatus()}>Check connection</button>
+      <div className="menu-rule" /><p className="model-status">{statusError || (modelStatus?.configured ? `${modelStatus.model} connected` : "Add MODEL_API_KEY in .env.local to connect Meta.")}</p><button onClick={() => void refreshStatus()}>Check connection</button>
       {modelStatus?.accessCodeRequired && <button onClick={() => { setShowAccess(true); setMenu(false); }}>Demo access code</button>}
     </aside>}
     {connections && <aside className="connections-panel"><div className="panel-heading"><span>Connections</span><button onClick={() => setConnections(false)} aria-label="Close connections">×</button></div><p className="panel-explainer">Arrows show where a discussion began. Related topics can be included in your next question.</p>
@@ -507,8 +525,8 @@ export default function ConversationSpace() {
     </aside>}
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
     <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(); }}>
-      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={activeId} view={view} reducedMotion={reducedMotion}>
-        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} canReroute={canReroute} onReroute={reroute} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onSource={openSource} readingRef={(element) => {
+      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView}>
+        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
         }} onScroll={(top) => {
@@ -518,14 +536,14 @@ export default function ConversationSpace() {
           scrollTimer.current = setTimeout(() => setScrollRevision((value) => value + 1), 250);
         }} />}
       </SpatialWorld>
-      {!started && <div className="welcome"><h1>What’s on your mind?</h1><button onClick={() => void openFresh(true)} disabled={!ready}>Explore a sample conversation <span>↗</span></button></div>}
+      {!started && <div className="welcome"><h1>What’s on your mind?</h1></div>}
     </div>
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
     <div className="composer-dock">
       {notice && <p className="composer-notice" role="status">{notice}{unreadId && <button onClick={openUnread}>Open answer ↗</button>}<button onClick={() => setNotice("")} aria-label="Dismiss notice">×</button></p>}
       {selection && <div className="selection-chip"><span>About</span><p>{selectionLabel || "Selected section"}</p><button onClick={() => setSelection(null)} aria-label="Clear selected passage">×</button></div>}
-      {started && <div className="composer-context"><span>{active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span><select aria-label="Answer placement" value={mode} onChange={(event) => setMode(event.target.value as RoutingMode)}><option value="auto">Auto</option><option value="continue">Continue here</option><option value="branch">New branch</option></select></div>}
+      {started && <div className="composer-context"><span>{active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
       <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={draft} onChange={(event) => { if (pending && !pending.error) navigation.current += 1; setDraft(event.target.value); }} onKeyDown={composerKeydown} aria-label="Your question" placeholder={selection ? "Ask about this passage" : "Ask anything"} rows={1} maxLength={8000} disabled={!ready || switching} />{draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
     </div>
     {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onSubmit={(event) => { event.preventDefault(); setShowAccess(false); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => setShowAccess(false)} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}

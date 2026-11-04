@@ -4,6 +4,7 @@ import type { AnswerRequest } from "../src/lib/contracts";
 import { AnswerError, MAX_CONTEXT_CHARS, MAX_REQUEST_BYTES, buildAnswerContext, validateAnswerOutput, validateAnswerRequest } from "../src/lib/ai";
 import { createAnswerHandler, generateAnswer, getProviderStatus } from "../src/lib/provider";
 import { createSampleConversation } from "../src/lib/sample";
+import { createConversation } from "../src/lib/session";
 
 const testEnv = { MODEL_API_KEY: "unit-test-placeholder" };
 
@@ -92,6 +93,58 @@ test("long conversations stay bounded while selected text and recent context rem
   assert.equal(context.payload.selection?.text, "Put base salary");
   assert.ok(JSON.stringify(context.payload).includes("LATEST_DETAIL"));
   assert.equal(context.record.truncated, true);
+});
+
+test("a branch follow-up retains its original source even after the parent excerpt drops it", () => {
+  const request = input();
+  const root = request.conversation.explorations[request.conversation.rootId];
+  const source = request.conversation.explorations.compensation.source!;
+  const original = root.messages.find((message) => message.id === source.messageId)!.sections.find((section) => section.id === source.sectionId)!;
+  original.body = "The calibration constant is 7.13 units.";
+  source.quote = original.body;
+  root.messages.push({ id: "later-parent-answer", role: "assistant", sections: [{ id: "later-parent-section", title: "Drainage", body: "Inspect drainage and record the findings. ".repeat(600) }] });
+  request.question = "What was the exact calibration constant in my source passage?";
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  assert.equal(request.selection, null);
+  assert.ok(!JSON.stringify(context.payload.topics.find((topic) => topic.id === root.id)?.messages).includes("7.13"));
+  assert.equal(context.payload.anchors[0].text, original.body);
+  assert.equal(context.payload.anchors[0].source.sectionId, source.sectionId);
+  assert.equal(context.payload.anchors[0].kind, "quote");
+  assert.equal(context.payload.anchors[0].truncated, false);
+  assert.equal(context.record.truncated, true);
+});
+
+test("selected clarification sources survive as anchors on later questions in the same topic", () => {
+  const request = input();
+  const topic = request.conversation.explorations.compensation;
+  const original = topic.messages.find((message) => message.role === "assistant")!;
+  topic.messages.push({ id: "selected-clarification", role: "assistant", source: { explorationId: topic.id, messageId: original.id, sectionId: original.sections[0].id, quote: "Put base salary" }, sections: [{ id: "selected-clarification-text", title: "Clarification", body: "Use recurring cash as your starting point." }] });
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  assert.ok(context.payload.anchors.some((anchor) => anchor.text === "Put base salary" && anchor.source.messageId === original.id));
+});
+
+test("deep source chains keep the nearest exact anchor and current selection within a bounded context", () => {
+  const space = createConversation();
+  let parent = space.rootId;
+  const count = 18;
+  for (let index = 0; index < count; index += 1) {
+    const id = index === 0 ? parent : `level-${index}`;
+    const body = `Source level ${index}: ` + 'Quoted "measurement". '.repeat(240);
+    const previous = space.explorations[parent];
+    const source = index ? { explorationId: parent, messageId: `answer-${index - 1}`, sectionId: `section-${index - 1}`, quote: previous.messages[0].sections[0].body } : null;
+    space.explorations[id] = { id, title: `Level ${index}`, summary: "Current topic summary", parentId: index ? parent : null, source, position: [0, 0, -index * 1000], messages: [{ id: `answer-${index}`, role: "assistant", sections: [{ id: `section-${index}`, title: "Measurements", body }] }] };
+    parent = id;
+  }
+  const request: AnswerRequest = { requestId: "deep-follow-up", conversation: space, activeId: parent, question: "Explain the selected measurement using the source.", selection: { explorationId: parent, messageId: `answer-${count - 1}`, sectionId: `section-${count - 1}`, quote: `Source level ${count - 1}:` }, mode: "auto", includeIds: [] };
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+  assert.equal(context.payload.selection?.text, request.selection!.quote);
+  assert.equal(context.payload.anchors[0].text, space.explorations[parent].source!.quote);
+  assert.equal(context.payload.anchors[0].truncated, false);
+  assert.ok(context.payload.anchors.length <= 12);
+  assert.equal(context.record.truncated, true);
+  assert.ok(context.payload.topics.some((topic) => topic.id === parent && topic.messages.length > 0));
+  for (const anchor of context.payload.anchors) assert.ok(context.record.fullIds.includes(anchor.source.explorationId));
 });
 
 test("forced routing is respected and invented related targets are rejected", () => {

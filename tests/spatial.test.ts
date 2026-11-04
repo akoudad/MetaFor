@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getDepth } from "../src/lib/model";
+import type { Conversation } from "../src/lib/model";
 import { createSampleConversation } from "../src/lib/sample";
 import {
   CARD_HEIGHT,
@@ -8,6 +9,7 @@ import {
   FIELD_OF_VIEW,
   MAX_DISTANCE,
   MIN_DISTANCE,
+  applyPositionOverrides,
   connectionEndpoints,
   detailForScale,
   fitOverview,
@@ -16,8 +18,48 @@ import {
   normalizeWheel,
   zoomView,
 } from "../src/lib/spatial";
+import type { SpatialNode, SpatialPoint } from "../src/lib/spatial";
 
-test("layout keeps depth in Z and spreads branches spatially around the fixed root", () => {
+function graph(count: number, parentIndex: (index: number) => number): Conversation {
+  const space: Conversation = { id: "layout-test", title: "Layout test", rootId: "topic-0", explorations: {} };
+  for (let index = 0; index < count; index++) {
+    const id = `topic-${index}`;
+    const parentId = index ? `topic-${parentIndex(index)}` : null;
+    space.explorations[id] = {
+      id, title: `Topic ${index}`, summary: "", parentId,
+      source: parentId ? { explorationId: parentId, messageId: `${parentId}-answer`, sectionId: `${parentId}-section` } : null,
+      position: [0, 0, 0],
+      messages: [{ id: `${id}-answer`, role: "assistant", sections: [{ id: `${id}-section`, title: "Section", body: "A topic to explore." }] }],
+    };
+  }
+  return space;
+}
+
+function projectedCards(nodes: SpatialNode[], view: SpatialPoint, width: number, height: number) {
+  const focal = height / (2 * Math.tan(FIELD_OF_VIEW * Math.PI / 360));
+  return nodes.map((node) => {
+    const scale = focal / (view.z - node.position.z);
+    return { id: node.id, x: width / 2 + (node.position.x - view.x) * scale, y: height / 2 - (node.position.y - view.y) * scale, scale };
+  });
+}
+
+function assertSeparatedOverview(nodes: SpatialNode[], width: number, height: number, view = fitOverview(nodes, width, height)) {
+  const cards = projectedCards(nodes, view, width, height);
+  for (let index = 0; index < cards.length; index++) {
+    const card = cards[index];
+    assert.ok(card.scale > 0);
+    assert.ok(card.x - CARD_WIDTH * card.scale / 2 >= 0 && card.x + CARD_WIDTH * card.scale / 2 <= width);
+    assert.ok(card.y - CARD_HEIGHT * card.scale / 2 >= 0 && card.y + CARD_HEIGHT * card.scale / 2 <= height);
+    for (const other of cards.slice(index + 1)) {
+      const halfWidths = CARD_WIDTH * (card.scale + other.scale) / 2;
+      const halfHeights = CARD_HEIGHT * (card.scale + other.scale) / 2;
+      assert.ok(Math.abs(card.x - other.x) >= halfWidths || Math.abs(card.y - other.y) >= halfHeights,
+        `${card.id} overlaps ${other.id} at ${width}×${height}`);
+    }
+  }
+}
+
+test("layout keeps semantic depth and reserves distinct lanes around each parent", () => {
   const space = createSampleConversation();
   const nodes = layoutSpace(space);
   assert.deepEqual(nodes, layoutSpace(space));
@@ -31,18 +73,33 @@ test("layout keeps depth in Z and spreads branches spatially around the fixed ro
     const parentId = space.explorations[node.id].parentId;
     if (parentId) {
       const parent = nodes.find((peer) => peer.id === parentId)!;
-      assert.notEqual(node.position.x, parent.position.x);
-      assert.notEqual(node.position.y, parent.position.y);
+      assert.ok(node.position.y < parent.position.y);
+      assert.ok(parent.position.y - node.position.y > CARD_HEIGHT + 1050 * Math.tan(FIELD_OF_VIEW * Math.PI / 360));
     }
   }
   const firstLevel = nodes.filter((node) => space.explorations[node.id].parentId === space.rootId);
-  assert.equal(new Set(firstLevel.map((node) => `${Math.sign(node.position.x)},${Math.sign(node.position.y)}`)).size, 4);
+  assert.equal(new Set(firstLevel.map((node) => node.position.x)).size, firstLevel.length);
   const compensation = nodes.find((node) => node.id === "compensation")!.position;
   const equity = nodes.find((node) => node.id === "equity")!.position;
   const vesting = nodes.find((node) => node.id === "vesting")!.position;
-  assert.ok(compensation.x < 0 && compensation.y > 0);
-  assert.ok(equity.x < compensation.x && equity.y > compensation.y);
-  assert.ok(vesting.x < equity.x && vesting.y > equity.y);
+  assert.equal(equity.x, compensation.x);
+  assert.equal(vesting.x, equity.x);
+  assert.ok(vesting.y < equity.y && equity.y < compensation.y);
+});
+
+test("fitted overviews separate projected cards across broad, mixed, and 200-level graphs", () => {
+  const spaces = [
+    createSampleConversation(),
+    graph(200, () => 0),
+    graph(80, (index) => Math.floor((index - 1) / 3)),
+    graph(200, (index) => Math.floor((index - 1) / 2)),
+    graph(200, (index) => index - 1),
+  ];
+  for (const space of spaces) {
+    const nodes = layoutSpace(space);
+    assert.ok(nodes.every((node) => Object.values(node.position).every((value) => Number.isFinite(value) && Math.abs(value) < 1e6)));
+    for (const [width, height] of [[1440, 900], [390, 700], [700, 390], [2560, 1080]]) assertSeparatedOverview(nodes, width, height);
+  }
 });
 
 test("adding root siblings or deeper branches leaves existing default positions unchanged", () => {
@@ -63,18 +120,46 @@ test("adding root siblings or deeper branches leaves existing default positions 
   }
 });
 
+test("incrementally appending a mixed tree preserves all earlier world positions", () => {
+  const complete = graph(80, (index) => Math.floor((index - 1) / 3));
+  const growing = structuredClone(complete);
+  growing.explorations = {};
+  const remembered = new Map<string, SpatialPoint>();
+  for (const exploration of Object.values(complete.explorations)) {
+    growing.explorations[exploration.id] = exploration;
+    for (const node of layoutSpace(growing)) {
+      if (remembered.has(node.id)) assert.deepEqual(node.position, remembered.get(node.id));
+      else remembered.set(node.id, node.position);
+    }
+  }
+});
+
 test("position overrides move only requested nodes and leave the conversation unchanged", () => {
   const space = createSampleConversation();
   const original = structuredClone(space);
   const defaults = layoutSpace(space);
   const moved = { x: 4500, y: -2200, z: -1400 };
   const nodes = layoutSpace(space, { compensation: moved });
+  assert.deepEqual(nodes, applyPositionOverrides(defaults, { compensation: moved }));
   assert.deepEqual(nodes.find((node) => node.id === "compensation")!.position, moved);
   for (const node of nodes.filter((node) => node.id !== "compensation")) {
     assert.deepEqual(node.position, defaults.find((value) => value.id === node.id)!.position);
   }
   assert.deepEqual(space, original);
   assert.deepEqual(layoutSpace(space, { compensation: { x: NaN, y: 3, z: 2 } }), defaults);
+  assert.deepEqual(applyPositionOverrides(defaults, {}), defaults, "clearing overrides restores the automatic layout");
+});
+
+test("manual placement stays literal while remaining automatic rows stay separated", () => {
+  const base = layoutSpace(graph(80, (index) => Math.floor((index - 1) / 3)));
+  const manual = { x: -18_000, y: 15_000, z: -3000 };
+  const nodes = applyPositionOverrides(base, { "topic-4": manual, "topic-5": manual });
+  assert.deepEqual(nodes.find((node) => node.id === "topic-4")!.position, manual);
+  assert.deepEqual(nodes.find((node) => node.id === "topic-5")!.position, manual, "intentional manual overlap must not silently rearrange cards");
+  const automatic = nodes.filter((node) => !["topic-4", "topic-5"].includes(node.id));
+  for (const [width, height] of [[1440, 900], [390, 700]]) {
+    assertSeparatedOverview(automatic, width, height, fitOverview(nodes, width, height));
+  }
 });
 
 test("origin endpoints stop outside card edges and retain parent-to-child direction", () => {

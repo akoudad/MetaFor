@@ -12,6 +12,9 @@ import type { Snapshot } from "../src/lib/storage";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 const originals = new Map<string, PropertyDescriptor | undefined>();
 const frames = new Map<number, ReturnType<typeof setTimeout>>();
+const manualFrames = new Map<number, FrameRequestCallback>();
+let manualAnimation = false;
+let prefersReducedMotion = true;
 let frameId = 0;
 let ui: typeof import("@testing-library/react");
 let userEvent: typeof import("@testing-library/user-event").default;
@@ -41,12 +44,13 @@ before(async () => {
   globalValue("IS_REACT_ACT_ENVIRONMENT", true);
   globalValue("requestAnimationFrame", (callback: FrameRequestCallback) => {
     const id = ++frameId;
-    frames.set(id, setTimeout(() => { frames.delete(id); callback(performance.now()); }, 1));
+    if (manualAnimation) manualFrames.set(id, callback);
+    else frames.set(id, setTimeout(() => { frames.delete(id); callback(performance.now()); }, 1));
     return id;
   });
-  globalValue("cancelAnimationFrame", (id: number) => { clearTimeout(frames.get(id)); frames.delete(id); });
+  globalValue("cancelAnimationFrame", (id: number) => { clearTimeout(frames.get(id)); frames.delete(id); manualFrames.delete(id); });
   globalValue("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
-  Object.defineProperty(dom.window, "matchMedia", { value: (media: string) => ({ media, matches: true, addEventListener() {}, removeEventListener() {} }) });
+  Object.defineProperty(dom.window, "matchMedia", { value: (media: string) => ({ media, matches: prefersReducedMotion, addEventListener() {}, removeEventListener() {} }) });
   Object.defineProperty(dom.window.HTMLCanvasElement.prototype, "getContext", { value: () => null });
   for (const [name, value] of Object.entries({ clientWidth: 1100, clientHeight: 780, offsetHeight: 413, scrollHeight: 2000 })) {
     Object.defineProperty(dom.window.HTMLElement.prototype, name, { configurable: true, get: () => value });
@@ -70,6 +74,7 @@ before(async () => {
 });
 
 beforeEach(() => {
+  manualAnimation = false; prefersReducedMotion = true;
   globalValue("indexedDB", new IDBFactory());
   dom.window.localStorage.clear();
   requests = [];
@@ -92,6 +97,7 @@ afterEach(async () => {
   dom.window.getSelection()?.removeAllRanges();
   for (const frame of frames.values()) clearTimeout(frame);
   frames.clear();
+  manualFrames.clear();
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase("metaphore-spaces");
     request.onsuccess = () => resolve();
@@ -180,13 +186,19 @@ function selectPassage(element: Element, quote: string) {
   ui.fireEvent.pointerUp(element, { pointerId: 1, button: 0 });
 }
 
-test("the first live answer starts the root without a useless reroute control", async () => {
+test("a fresh chat is empty and its first answer is placed automatically", async () => {
   answer = (request) => Response.json(result(request, "continue"));
   const user = await open();
+  assert.ok(ui.screen.getByRole("heading", { name: "What’s on your mind?" }));
+  assert.ok(ui.screen.getByRole("button", { name: "New chat" }));
+  assert.ok(ui.screen.getByRole("button", { name: "Saved chats" }));
+  assert.equal(ui.screen.queryByRole("button", { name: /sample/i }), null);
+  assert.equal(ui.screen.queryByRole("combobox", { name: "Answer placement" }), null);
   await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Help plan an observatory{Enter}");
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
   assert.equal(requests.length, 1);
   assert.equal(requests[0].activeId, "root");
+  assert.equal(requests[0].mode, "auto");
   assert.equal(ui.screen.queryByRole("button", { name: "Open as branch" }), null);
   assert.equal(ui.screen.queryByRole("button", { name: "Keep in parent" }), null);
 });
@@ -203,6 +215,7 @@ test("an exact passage from an older arbitrary answer becomes the new branch sou
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
   assert.equal(requests.length, 1);
   assert.equal(requests[0].activeId, "weather");
+  assert.equal(requests[0].mode, "auto");
   assert.deepEqual(requests[0].selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
   assert.equal(document.querySelector(".topic.is-focused .source-quote p")?.textContent, quote);
   ui.fireEvent.pageHide(window);
@@ -262,42 +275,6 @@ test("editing the same topic's next draft prevents a pending answer from taking 
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
   await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, nextDraft);
-});
-
-test("placement controls move one existing answer to its parent and back without another request", async () => {
-  answer = (request) => Response.json(result(request));
-  const user = await open(fixture());
-  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
-  const quote = "wind exposure before choosing the roof";
-  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain a suitable roof design{Enter}");
-  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
-  const expectedText = result(requests[0]).sections[0].body;
-  await user.click(await ui.screen.findByRole("button", { name: "Keep in parent" }));
-  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
-  assert.equal(ui.screen.queryByRole("button", { name: "Go to Protect the roof" }), null);
-  assert.ok(document.querySelector(".topic.is-focused")?.textContent?.includes(expectedText));
-  assert.equal(requests.length, 1);
-  ui.fireEvent.pageHide(window);
-  const inParent = storage.parseSnapshot(storage.serializeSnapshot((await storage.loadSnapshot("ui-observatory"))!));
-  const answerInParent = inParent.conversation.explorations.weather.messages.find((message) => message.requestId === requests[0].requestId && message.role === "assistant")!;
-  assert.equal(answerInParent.sections[0].body, expectedText);
-  assert.deepEqual(answerInParent.source, requests[0].selection);
-  assert.equal(Object.keys(inParent.conversation.explorations).length, 3);
-
-  await user.click(await ui.screen.findByRole("button", { name: "Open as branch" }));
-  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
-  assert.equal(requests.length, 1);
-  assert.ok(document.querySelector(".topic.is-focused")?.textContent?.includes(expectedText));
-  assert.equal(document.querySelector(".topic.is-focused .source-quote p")?.textContent, quote);
-  ui.fireEvent.pageHide(window);
-  const inBranch = storage.parseSnapshot(storage.serializeSnapshot((await storage.loadSnapshot("ui-observatory"))!));
-  const branch = inBranch.conversation.explorations[inBranch.view.activeId];
-  assert.equal(branch.parentId, "weather");
-  assert.deepEqual(branch.source, requests[0].selection);
-  const matchingAnswers = Object.values(inBranch.conversation.explorations).flatMap((item) => item.messages).filter((message) => message.role === "assistant" && message.requestId === requests[0].requestId);
-  assert.equal(matchingAnswers.length, 1, "moving an answer must not duplicate it");
-  assert.equal(matchingAnswers[0].sections[0].body, expectedText);
 });
 
 test("remounting restores the draft, passage, reader position, and positioned topic view", async () => {
@@ -415,27 +392,6 @@ test("an invalid .ingx import leaves the active workspace and unsent draft intac
   assert.equal(saved!.view.places.equipment.draft, draft);
 });
 
-test("moving a selected continuation into a branch leaves a valid exportable snapshot", async () => {
-  answer = (request) => Response.json(result(request, "continue"));
-  const user = await open(fixture());
-  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Add a roof recommendation{Enter}");
-  await ui.screen.findByText(result(requests[0], "continue").sections[0].body);
-  const paragraph = document.querySelector(`[data-message-id="answer-${requests[0].requestId}"] .answer-markdown p`)!;
-  selectPassage(paragraph, "record of local gusts");
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, "record of local gusts");
-  await user.click(ui.screen.getByRole("button", { name: "Open as branch" }));
-  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
-  ui.fireEvent.pageHide(window);
-  const snapshot = storage.parseSnapshot(storage.serializeSnapshot((await storage.loadSnapshot("ui-observatory"))!));
-  assert.equal(snapshot.conversation.explorations[snapshot.view.activeId].parentId, "weather");
-  assert.equal(snapshot.view.places.weather.selection, null, "the old topic must not retain a reference to the moved answer");
-  assert.equal(requests.length, 1);
-  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
-  assert.equal(document.querySelector(".selection-chip"), null);
-  assert.equal(ui.screen.queryByText(/Could not save/), null);
-});
-
 test("scrolling and zooming during a request leaves its answer in the background and clears the sent draft", async () => {
   let resolveAnswer!: (value: Response) => void;
   answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
@@ -478,6 +434,10 @@ test("a slow valid import disables composing until it restores the imported work
   assert.ok(ui.screen.getByText("Opening conversation…"));
   await user.type(composer, "Do not append this");
   ui.fireEvent.submit(composer.form!);
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
+  assert.equal(activeTopic(), "Go to Weather records", "pending storage transitions must also block keyboard-activated navigation");
+  assert.equal(document.querySelector(".selection-chip"), null);
   assert.equal(requests.length, 0);
   assert.equal(composer.value, "Keep the original draft");
   await ui.act(async () => { resolveFile(storage.serializeSnapshot(incoming)); });
@@ -513,23 +473,241 @@ test("a failed slow import re-enables composing without replacing the current dr
   assert.equal(requests.length, 0);
 });
 
-test("moving a branch back to its parent cannot discard its restored unsent draft", async () => {
+
+test("automatic continuation retains its source and can be explored without placement controls", async () => {
+  answer = (request) => Response.json(result(request, requests.length === 1 ? "continue" : "branch"));
+  const user = await open(fixture());
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, "wind exposure before choosing the roof");
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Clarify the roof recommendation{Enter}");
+  await ui.waitFor(() => assert.ok(document.querySelector(`[data-message-id="answer-${requests[0].requestId}"]`)));
+  assert.equal(activeTopic(), "Go to Weather records");
+  assert.equal(ui.screen.queryByRole("combobox", { name: "Answer placement" }), null);
+  assert.equal(ui.screen.queryByRole("button", { name: /Open as branch|Keep in parent/ }), null);
+  assert.equal(ui.screen.queryByText(/Opened a branch|Continued here/), null);
+  const quote = "record of local gusts";
+  selectPassage(document.querySelector(`[data-message-id="answer-${requests[0].requestId}"] .answer-markdown p`)!, quote);
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explore measuring those gusts{Enter}");
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
+  assert.ok(requests.every((request) => request.mode === "auto"));
+  assert.equal(requests[1].selection?.messageId, `answer-${requests[0].requestId}`);
+  assert.equal(requests[1].selection?.quote, quote);
+  ui.fireEvent.pageHide(window);
+  const snapshot = storage.parseSnapshot(storage.serializeSnapshot((await storage.loadSnapshot("ui-observatory"))!));
+  const continued = snapshot.conversation.explorations.weather.messages.find((message) => message.id === `answer-${requests[0].requestId}`)!;
+  assert.deepEqual(continued.source, requests[0].selection);
+  assert.equal(continued.sections[0].body, result(requests[0]).sections[0].body);
+  assert.deepEqual(snapshot.conversation.explorations[snapshot.view.activeId].source, requests[1].selection);
+});
+
+test("New chat preserves previous content and drafts in Saved chats", async () => {
+  const initial = fixture();
+  const user = await open(initial);
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  const quote = "wind exposure before choosing the roof";
+  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
+  const draft = "Keep my unfinished weather question";
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), draft);
+  await user.click(ui.screen.getByRole("button", { name: "New chat" }));
+  await ui.screen.findByRole("heading", { name: "What’s on your mind?" });
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "");
+  const preserved = (await storage.loadSnapshot(initial.conversation.id))!;
+  assert.deepEqual(preserved.conversation, initial.conversation);
+  assert.equal(preserved.view.places.weather.draft, draft);
+  assert.equal(preserved.view.places.weather.selection?.quote, quote);
+  const freshDraft = "A different unfinished question";
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), freshDraft);
+  await user.click(ui.screen.getByRole("button", { name: "Saved chats" }));
+  const savedPanel = ui.screen.getByRole("complementary", { name: "Saved chats" });
+  await user.click(await ui.within(savedPanel).findByRole("button", { name: /^Plan an observatory/ }));
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
+  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  const library = await storage.listSnapshots();
+  assert.equal(library.length, 2);
+  const fresh = (await storage.loadSnapshot(library.find((item) => item.id !== initial.conversation.id)!.id))!;
+  assert.equal(fresh.view.places[fresh.conversation.rootId].draft, freshDraft);
+  assert.equal(requests.length, 0);
+});
+
+test("a legacy sample stays saved but startup opens an empty chat", async () => {
+  const real = fixture();
+  real.view.places.observatory = { view: real.view.view, draft: "My original research", selection: null, scrollTop: 0 };
+  await storage.saveSnapshot(real);
+  const legacy = fixture();
+  legacy.conversation.id = "legacy-demo";
+  legacy.conversation.title = "Legacy example";
+  legacy.conversation.kind = "sample";
+  legacy.savedAt = "2025-01-01T00:00:00.000Z";
+  const user = await open(legacy);
+  assert.ok(ui.screen.getByRole("heading", { name: "What’s on your mind?" }));
+  assert.equal(ui.screen.queryByRole("navigation", { name: "Conversation navigation" }), null);
+  assert.deepEqual((await storage.loadSnapshot("legacy-demo"))!.conversation, legacy.conversation);
+  await user.click(ui.screen.getByRole("button", { name: "Saved chats" }));
+  const panel = ui.screen.getByRole("complementary", { name: "Saved chats" });
+  assert.ok(await ui.within(panel).findByRole("button", { name: /^Legacy example/ }));
+  await user.click(await ui.within(panel).findByRole("button", { name: /^Plan an observatory/ }));
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Plan an observatory"));
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "My original research");
+  assert.equal((await storage.listSnapshots()).length, 2);
+  assert.equal(requests.length, 0);
+});
+
+test("Reset layout clears saved manual positions while retaining content and reading state", async () => {
+  const initial = fixture();
+  initial.view.positions = { weather: { x: 1234, y: -260, z: -1050 } };
+  const user = await open(initial);
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  const quote = "wind exposure before choosing the roof";
+  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
+  const draft = "Keep this while arranging the topics";
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), draft);
+  const reader = document.querySelector<HTMLDivElement>('[data-topic="weather"] .topic-reading')!;
+  reader.scrollTop = 315; ui.fireEvent.scroll(reader);
+  const handle = ui.screen.getByRole("button", { name: "Move Weather records" });
+  ui.fireEvent.pointerDown(handle, { button: 0, clientX: 100, clientY: 100 });
+  ui.fireEvent.pointerMove(handle, { clientX: 180, clientY: 130 });
+  ui.fireEvent.pointerUp(handle, { button: 0, clientX: 180, clientY: 130 });
+  ui.fireEvent.pageHide(window);
+  const moved = (await storage.loadSnapshot(initial.conversation.id))!;
+  assert.notDeepEqual(moved.view.positions?.weather, initial.view.positions.weather, "moving a handle should persist the new position");
+  await user.click(ui.screen.getByRole("button", { name: "Conversation menu" }));
+  await user.click(ui.screen.getByRole("button", { name: "Reset layout" }));
+  ui.fireEvent.pageHide(window);
+  const reset = (await storage.loadSnapshot(initial.conversation.id))!;
+  assert.deepEqual(reset.view.positions, {});
+  assert.equal(reset.view.overview, true);
+  assert.equal(reset.view.activeId, "weather");
+  assert.deepEqual(reset.conversation, initial.conversation);
+  assert.equal(reset.view.places.weather.draft, draft);
+  assert.equal(reset.view.places.weather.selection?.quote, quote);
+  assert.equal(reset.view.places.weather.scrollTop, 315);
+  assert.notDeepEqual(reset.view.view, moved.view.view);
+  ui.cleanup(); await open();
+  ui.fireEvent.pageHide(window);
+  assert.deepEqual((await storage.loadSnapshot(initial.conversation.id))!.view.positions, {});
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
+  assert.equal(requests.length, 0);
+});
+
+test("a failed save cannot replace the current chat when New chat is chosen", async () => {
+  const user = await open(fixture());
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  const draft = "Do not lose this question";
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), draft);
+  const database = indexedDB;
+  const local = localStorage;
+  globalValue("indexedDB", undefined);
+  globalValue("localStorage", { getItem: () => null, setItem: () => { throw new Error("Storage blocked"); } });
+  try {
+    await user.click(ui.screen.getByRole("button", { name: "New chat" }));
+    await ui.screen.findByText(/Could not save this space locally/);
+    assert.equal(activeTopic(), "Go to Weather records");
+    const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+    assert.equal(composer.value, draft);
+    assert.equal(composer.disabled, false);
+    assert.equal(requests.length, 0);
+  } finally {
+    globalValue("indexedDB", database);
+    globalValue("localStorage", local);
+  }
+});
+
+test("an automatically separated topic links to its parent without inventing a selected passage", async () => {
   answer = (request) => Response.json(result(request));
   const user = await open(fixture());
   await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain a roof design{Enter}");
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explore roof design as a separate topic{Enter}");
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
-  const draft = "Follow up on this roof design";
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), draft);
-  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
-  await user.click(ui.screen.getByRole("button", { name: "Go to Protect the roof" }));
-  await user.click(await ui.screen.findByRole("button", { name: "Keep in parent" }));
-  await ui.screen.findByText("Send or clear this draft before moving the answer.");
-  assert.equal(activeTopic(), "Go to Protect the roof");
-  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
-  assert.equal(requests.length, 1);
+  assert.equal(requests[0].mode, "auto");
+  assert.equal(requests[0].selection, null);
+  assert.equal(document.querySelector(".topic.is-focused .source-quote"), null);
+  await user.click(ui.screen.getByRole("button", { name: "Back to Weather records ↗" }));
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
+  assert.equal(document.querySelector(".selection-chip"), null);
   ui.fireEvent.pageHide(window);
-  const snapshot = storage.parseSnapshot(storage.serializeSnapshot((await storage.loadSnapshot("ui-observatory"))!));
-  assert.equal(snapshot.conversation.explorations[snapshot.view.activeId].parentId, "weather");
-  assert.equal(snapshot.view.places[snapshot.view.activeId].draft, draft);
+  const saved = (await storage.loadSnapshot("ui-observatory"))!;
+  const child = Object.values(saved.conversation.explorations).find((item) => item.messages.some((message) => message.requestId === requests[0].requestId))!;
+  assert.equal(child.parentId, "weather");
+  assert.equal(child.source, null);
+  assert.equal(requests.length, 1);
+});
+
+test("grabbing during camera easing freezes the displayed view and uses its drag scale", async () => {
+  manualAnimation = true; prefersReducedMotion = false;
+  const user = await open(fixture());
+  const stepFrame = async (time: number) => {
+    const callbacks = [...manualFrames.values()]; manualFrames.clear();
+    await ui.act(async () => { for (const callback of callbacks) callback(time); });
+  };
+  await stepFrame(1000);
+  const root = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
+  const scaleOf = () => Number(root.style.transform.match(/scale\(([^)]+)\)/)?.[1]);
+  const originalScale = scaleOf();
+  await user.click(ui.screen.getByRole("button", { name: "Zoom out" }));
+  await stepFrame(1016);
+  const displayedScale = scaleOf();
+  assert.ok(displayedScale < originalScale && displayedScale > originalScale / 1.5, "the camera must still be between its old view and zoom target");
+  const focal = 780 / (2 * Math.tan(25 * Math.PI / 180));
+  const displayedZ = focal / displayedScale;
+  const handle = ui.screen.getByRole("button", { name: "Move Plan an observatory" });
+  ui.fireEvent.pointerDown(handle, { button: 0, clientX: 100, clientY: 100 });
+  await stepFrame(1032);
+  assert.ok(Math.abs(scaleOf() - displayedScale) < 1e-9, "grabbing must stop the unfinished zoom without changing its displayed scale");
+  ui.fireEvent.pointerMove(handle, { clientX: 160, clientY: 124 });
+  ui.fireEvent.pointerUp(handle, { button: 0, clientX: 160, clientY: 124 });
+  ui.fireEvent.pageHide(window);
+  const snapshot = (await storage.loadSnapshot("ui-observatory"))!;
+  assert.ok(Math.abs(snapshot.view.view.z - displayedZ) < 1e-9, "the saved target must be the camera seen when grabbing");
+  assert.ok(Math.abs(snapshot.view.positions!.observatory.x - 60 / displayedScale) < 1e-9);
+  assert.ok(Math.abs(snapshot.view.positions!.observatory.y + 24 / displayedScale) < 1e-9);
+  assert.equal(requests.length, 0);
+});
+
+test("old automatic-layout views recover an offscreen active topic without losing reading state", async () => {
+  const initial = fixture("weather");
+  initial.view.view = { x: -100_000, y: 100_000, z: 900 };
+  initial.view.places.weather = { view: initial.view.view, draft: "Keep these notes", selection: { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote: "wind exposure" }, scrollTop: 250 };
+  await open(initial);
+  const node = document.querySelector<HTMLElement>('[data-node-id="weather"]')!;
+  await ui.waitFor(() => assert.equal(node.style.visibility, "visible"));
+  ui.fireEvent.pageHide(window);
+  const snapshot = (await storage.loadSnapshot(initial.conversation.id))!;
+  assert.notDeepEqual(snapshot.view.view, initial.view.view);
+  assert.deepEqual(snapshot.conversation, initial.conversation);
+  assert.equal(snapshot.view.places.weather.draft, "Keep these notes");
+  assert.deepEqual(snapshot.view.places.weather.selection, initial.view.places.weather.selection);
+  assert.equal(snapshot.view.places.weather.scrollTop, 250);
+  assert.deepEqual(snapshot.view.places.weather.view, snapshot.view.view);
+});
+
+test("a valid saved view keeps its precise camera instead of recentering", async () => {
+  const initial = fixture();
+  initial.view.view = { x: 40, y: -25, z: 950 };
+  initial.view.places.observatory = { view: initial.view.view, draft: "Keep this viewpoint", selection: null, scrollTop: 125 };
+  await open(initial);
+  const node = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
+  await ui.waitFor(() => assert.equal(node.style.visibility, "visible"));
+  ui.fireEvent.pageHide(window);
+  const snapshot = (await storage.loadSnapshot(initial.conversation.id))!;
+  assert.deepEqual(snapshot.view.view, initial.view.view);
+  assert.equal(snapshot.view.places.observatory.scrollTop, 125);
+  assert.equal(snapshot.view.places.observatory.draft, "Keep this viewpoint");
+});
+
+test("an unrelated manual position does not prevent recovery of an offscreen automatic topic", async () => {
+  const initial = fixture("weather");
+  initial.view.positions = { observatory: { x: 1200, y: 450, z: 0 } };
+  initial.view.view = { x: -100_000, y: 100_000, z: 900 };
+  initial.view.places.weather = { view: initial.view.view, draft: "Keep the weather notes", selection: null, scrollTop: 180 };
+  await open(initial);
+  const active = document.querySelector<HTMLElement>('[data-node-id="weather"]')!;
+  await ui.waitFor(() => assert.equal(active.style.visibility, "visible"));
+  ui.fireEvent.pageHide(window);
+  const snapshot = (await storage.loadSnapshot(initial.conversation.id))!;
+  assert.notDeepEqual(snapshot.view.view, initial.view.view);
+  assert.deepEqual(snapshot.view.positions, initial.view.positions);
+  assert.deepEqual(snapshot.conversation, initial.conversation);
+  assert.equal(snapshot.view.places.weather.draft, "Keep the weather notes");
+  assert.equal(snapshot.view.places.weather.scrollTop, 180);
 });

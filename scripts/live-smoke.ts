@@ -59,8 +59,8 @@ async function main() {
   const quote = (plain.match(/[^.!?\n]*etag[^.!?\n]*[.!?]?/i)?.[0] ?? plain.split("\n").find((line) => line.trim()) ?? plain).trim().slice(0, 600);
   const source: SourceReference = { explorationId: rootId, messageId: firstMessage.id, sectionId: section.id, quote };
   validateSourceReference(conversation, source);
-  const branch = await send("selected deeper exploration", rootId, "Explore this selected idea in a separate, deeper topic: walk through ETag validation, 304 responses, and what changes when the resource changes. Include a tiny request/response example.", source, "auto");
-  const clarification = await send("same-topic clarification", branch.destinationId, "Quick clarification: does a 304 response normally include the full representation body? Answer in one short section.", null, "continue");
+  const branch = await send("selected deeper exploration", rootId, "Walk me through ETag validation in depth: 304 responses, what happens when the resource changes, and a complete request/response example.", source, "auto");
+  const clarification = await send("same-topic clarification", branch.destinationId, "Quick clarification: does a 304 response normally include the full representation body? Answer in one short section.", null, "auto");
 
   const destination = conversation.explorations[branch.destinationId];
   const checks = {
@@ -68,7 +68,7 @@ async function main() {
     generatedRelevantContent: /etag|cache-control/i.test(first.answer.sections.map((item) => item.body).join("\n")),
     autoCreatesChild: branch.answer.decision === "branch" && destination.parentId === rootId,
     exactSourcePreserved: JSON.stringify(destination.source) === JSON.stringify(source),
-    forcedContinueStays: clarification.answer.decision === "continue" && clarification.destinationId === branch.destinationId,
+    autoClarificationStays: clarification.answer.decision === "continue" && clarification.destinationId === branch.destinationId,
     branchUsesRootContext: branch.answer.context.fullIds.includes(rootId),
     clarificationUsesOwnAndRootContext: clarification.answer.context.fullIds.includes(branch.destinationId) && clarification.answer.context.fullIds.includes(rootId),
     originalAnswerUnchanged: JSON.stringify(conversation.explorations[rootId].messages.find((message) => message.id === firstMessage.id)) === firstMessageCopy,

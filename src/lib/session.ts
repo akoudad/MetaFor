@@ -1,5 +1,5 @@
 import type { AnswerRequest, AnswerResult } from "./contracts";
-import type { Connection, Conversation, Exploration, Message, SourceReference } from "./model";
+import type { Connection, Conversation, Exploration, Message } from "./model";
 import { validateConversation, validateSourceReference } from "./model";
 
 export function createConversation(): Conversation {
@@ -21,14 +21,6 @@ export function createConversation(): Conversation {
     },
     connections: [],
   };
-}
-
-function lastSource(exploration: Exploration): SourceReference | null {
-  const message = [...exploration.messages].reverse().find((item) => item.role === "assistant");
-  const section = message?.sections.at(-1);
-  return message && section
-    ? { explorationId: exploration.id, messageId: message.id, sectionId: section.id }
-    : null;
 }
 
 export function applyAnswer(
@@ -78,9 +70,11 @@ export function applyAnswer(
 
   const initialRoot = origin.id === space.rootId && !origin.messages.some((message) => message.role === "assistant");
   const decision = initialRoot ? "continue" : answer.decision;
-  const source = request.selection ? structuredClone(request.selection) : decision === "branch" ? lastSource(origin) : null;
-  if (decision === "branch" && !source) {
-    throw new Error("Explore a section of an existing answer before starting a branch.");
+  // A topic-level split has a navigation parent, but no selected passage.
+  // Never invent a section source from the previous answer's final paragraph.
+  const source = request.selection ? structuredClone(request.selection) : null;
+  if (decision === "branch" && !origin.messages.some((message) => message.role === "assistant")) {
+    throw new Error("Ask the first question before starting another topic.");
   }
   const destinationId = decision === "branch" ? `exploration-${request.requestId}` : originId;
   if (decision === "branch" && space.explorations[destinationId]) {
@@ -120,7 +114,7 @@ export function applyAnswer(
     : {
       ...origin,
       title: initialRoot ? answer.title : origin.title,
-      summary: initialRoot ? answer.summary : origin.summary,
+      summary: answer.summary,
       messages: [...origin.messages, question, response],
     };
   const connections: Connection[] = [...(space.connections ?? [])];

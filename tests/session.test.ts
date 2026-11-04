@@ -58,6 +58,32 @@ test("continue uses the captured selection topic and retains its source", () => 
   assert.equal(result.conversation.explorations[space.rootId].messages.length, space.explorations[space.rootId].messages.length);
 });
 
+test("an unselected new direction links to its parent topic without inventing a section source", () => {
+  const space = createSampleConversation();
+  const input = { ...request(space), question: "Explain browser caching." };
+  const result = applyAnswer(space, input, { ...answer(input), title: "Browser caching" });
+  const child = result.conversation.explorations[result.destinationId];
+  assert.equal(child.parentId, space.rootId);
+  assert.equal(child.source, null);
+  assert.equal(child.messages[0].source, null);
+  assert.equal(child.messages[1].source, null);
+  validateConversation(result.conversation);
+});
+
+test("continuations refresh the topic summary while keeping its established title", () => {
+  const space = createSampleConversation();
+  const input = request(space);
+  const original = JSON.stringify(space);
+  const response = { ...answer(input), decision: "continue" as const, summary: "The target has changed to summer internships; keep preparing for interviews." };
+  const result = applyAnswer(space, input, response);
+  assert.equal(result.conversation.explorations[space.rootId].summary, response.summary);
+  assert.equal(result.conversation.explorations[space.rootId].title, space.explorations[space.rootId].title);
+  assert.equal(result.conversation.title, space.title);
+  assert.equal(JSON.stringify(space), original);
+  assert.throws(() => applyAnswer(space, input, { ...response, summary: "x".repeat(3001) }), /summary/);
+  assert.equal(JSON.stringify(space), original);
+});
+
 test("retrying a completed request returns its existing answer", () => {
   const space = createSampleConversation();
   const input = request(space);

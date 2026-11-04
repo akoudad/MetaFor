@@ -21,6 +21,7 @@ type SpatialWorldProps = {
   activeId?: string;
   view: WorldPoint;
   reducedMotion: boolean;
+  onViewChange?: (view: WorldPoint) => void;
   children: (node: SpatialNode) => ReactNode;
 };
 
@@ -90,7 +91,8 @@ export default function SpatialWorld(props: SpatialWorldProps) {
     const container = containerRef.current;
     if (!container) return;
 
-    const camera = new PerspectiveCamera(FIELD_OF_VIEW, 1, 1, 100_000);
+    // Valid saved coordinates can be much farther apart than a small sample.
+    const camera = new PerspectiveCamera(FIELD_OF_VIEW, 1, 1, 30_000_000);
     let starsContext: CanvasRenderingContext2D | null = null;
     try {
       starsContext = starsRef.current?.getContext("2d") ?? null;
@@ -243,6 +245,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       camera.position.copy(currentView);
       // A shared, unrotated camera looks down -Z. Positive world Y points up.
       camera.updateMatrixWorld();
+      latest.current.onViewChange?.({ x: currentView.x, y: currentView.y, z: currentView.z });
       positions.clear();
       const minimumDistance = Math.max(camera.near, focalLength / MAX_PROJECTED_SCALE);
       drawBackground();
@@ -289,7 +292,9 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         element.style.left = `${screenX}px`;
         element.style.top = `${screenY}px`;
         element.style.transform = `translate(-50%, -50%) scale(${scale})`;
-        element.style.zIndex = String(Math.max(1, Math.round(camera.far - distance)));
+        // A deliberately overlapping manual placement must never cover the
+        // topic being read. Other cards keep their depth ordering.
+        element.style.zIndex = String(node.id === activeId ? camera.far + 1 : Math.max(1, Math.round(camera.far - distance)));
         element.style.setProperty("--node-scale", String(Math.max(0.1, scale)));
         const mobileFullThreshold = Math.max(0.1, (width - 32) / CARD_WIDTH * 0.9);
         element.dataset.detail = scale >= mobileFullThreshold ? "full" : detailForScale(scale);
