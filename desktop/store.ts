@@ -1,6 +1,6 @@
 import { mkdir, open, rename, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
-import type { HelpSession } from "./shared";
+import type { HelpHistoryItem, HelpSession } from "./shared";
 import { validateMarks } from "./help-model";
 
 const MAXIMUM_BYTES = 16 * 1024 * 1024;
@@ -114,16 +114,23 @@ export class HelpStore {
   }
 
   async list() {
-    await Promise.all(this.pending.values());
+    await Promise.allSettled(this.pending.values());
     let names: string[];
     try { names = await readdir(this.directory); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
-    const items: { id: string; title: string; updatedAt: string }[] = [];
+    const items: HelpHistoryItem[] = [];
     // Source images can be large. Reading one file at a time bounds memory even with a long history.
     for (const name of names.filter((name) => name.endsWith(".json"))) {
-      const session = await this.get(name.slice(0, -5));
-      if (session) items.push({ id: session.id, title: session.title, updatedAt: session.updatedAt });
+      let id: string;
+      try { id = safeId(name.slice(0, -5)); } catch { continue; }
+      try {
+        const session = await this.get(id);
+        if (session) items.push({ id: session.id, title: session.title, updatedAt: session.updatedAt });
+      } catch {
+        // Keep healthy exchanges accessible without hiding or overwriting unreadable files.
+        items.push({ id, title: "Unreadable saved exchange", updatedAt: null, status: "unreadable" });
+      }
     }
-    return items.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return items.sort((a, b) => a.updatedAt === null ? b.updatedAt === null ? a.id.localeCompare(b.id) : 1 : b.updatedAt === null ? -1 : Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }
 
   async delete(id: string) {

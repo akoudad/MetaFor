@@ -35,6 +35,13 @@ export type HelpSession = {
   updatedAt: string;
 };
 
+export type HelpHistoryItem = {
+  id: string;
+  title: string;
+  updatedAt: string | null;
+  status?: "unreadable";
+};
+
 export type CapturePayload = { image: string; width: number; height: number; displayId: string };
 export type CropRect = { x: number; y: number; width: number; height: number };
 export type DesktopSettings = {
@@ -64,7 +71,7 @@ export interface DesktopBridge {
   selectCapture(rect: CropRect): Promise<void>;
   cancelCapture(): Promise<void>;
   getHelpSession(): Promise<HelpSession>;
-  listHelp(): Promise<{ id: string; title: string; updatedAt: string }[]>;
+  listHelp(): Promise<HelpHistoryItem[]>;
   getHelp(id: string): Promise<HelpSession | null>;
   askHelp(request: { sessionId: string; question: string; marks: VisualMark[] }): Promise<HelpSession>;
   cancelHelp(sessionId: string): Promise<void>;

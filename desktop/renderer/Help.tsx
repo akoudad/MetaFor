@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, PointerEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { DesktopSettings, HelpSession, VisualMark } from "../shared";
+import type { DesktopSettings, HelpHistoryItem, HelpSession, VisualMark } from "../shared";
 import "./help.css";
 
 type Point = { x: number; y: number };
 type Tool = "point" | "rect" | "arrow";
-type HistoryItem = { id: string; title: string; updatedAt: string };
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const describeError = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : "Something went wrong. Your question is kept; please retry.";
 
@@ -35,7 +34,7 @@ export default function Help() {
   const [busy, setBusy] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState("");
-  const [history, setHistory] = useState<HistoryItem[] | null>(null);
+  const [history, setHistory] = useState<HelpHistoryItem[] | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sourceExpanded, setSourceExpanded] = useState(true);
@@ -65,12 +64,13 @@ export default function Help() {
   useEffect(() => {
     let mounted = true;
     let revision = 0;
+    let sessionRevision = 0;
     const acceptSettings = (value: DesktopSettings) => { setShortcut(value.shortcut); setConfigured(value.configured && !value.credentialLoading); setCredentialLoading(Boolean(value.credentialLoading)); };
     const refreshSettings = () => { const current = ++revision; void window.metaforDesktop.getSettings().then((value) => { if (mounted && current === revision) acceptSettings(value); }).catch(() => {}); };
     const changed = (event: Event) => { const value = (event as CustomEvent<DesktopSettings>).detail; if (value) { revision++; acceptSettings(value); } else refreshSettings(); };
-    window.metaforDesktop.getHelpSession().then((value) => { if (mounted) acceptSession(value); }).catch((failure) => { if (mounted) setError(describeError(failure)); });
+    window.metaforDesktop.getHelpSession().then((value) => { if (mounted && sessionRevision === 0) acceptSession(value); }).catch((failure) => { if (mounted && sessionRevision === 0) setError(describeError(failure)); });
     refreshSettings();
-    const unsubscribe = window.metaforDesktop.onHelpSession(acceptSession);
+    const unsubscribe = window.metaforDesktop.onHelpSession((value) => { sessionRevision++; if (mounted) acceptSession(value); });
     window.addEventListener("focus", refreshSettings);
     window.addEventListener("metafor-settings-changed", changed);
     return () => { mounted = false; unsubscribe(); window.removeEventListener("focus", refreshSettings); window.removeEventListener("metafor-settings-changed", changed); };
@@ -172,9 +172,9 @@ export default function Help() {
       <div className="help-history-heading"><strong>Saved exchanges</strong><button type="button" disabled={busy || deleting} onClick={() => void newSession()}>New</button></div>
       {!history.length && <p>No saved exchanges yet.</p>}
       {history.map((item) => <div className="help-history-item" key={item.id}>
-        <div className="help-history-row"><button type="button" className={`help-history-choice ${session?.id === item.id ? "current" : ""}`} disabled={busy || deleting} onClick={async () => {
+        <div className="help-history-row"><button type="button" className={`help-history-choice ${session?.id === item.id ? "current" : ""}`} disabled={busy || deleting || item.status === "unreadable"} onClick={async () => {
           try { acceptSession(await window.metaforDesktop.resumeHelp(item.id)); setHistory(null); setDeleteId(null); } catch (failure) { setError(describeError(failure)); }
-        }}><span>{item.title}</span><small>{new Date(item.updatedAt).toLocaleDateString()}</small></button><button type="button" className="help-history-delete" aria-label={`Delete ${item.title}`} disabled={busy || deleting} onClick={() => setDeleteId(item.id)}>×</button></div>
+        }}><span>{item.title}</span><small>{item.status === "unreadable" ? "Could not open · file kept unchanged" : item.updatedAt ? new Date(item.updatedAt).toLocaleDateString() : "Date unavailable"}</small></button><button type="button" className="help-history-delete" aria-label={`Delete ${item.title}`} disabled={busy || deleting} onClick={() => setDeleteId(item.id)}>×</button></div>
         {deleteId === item.id && <div className="help-delete-confirm" role="group" aria-label={`Confirm deletion of ${item.title}`}><p>Delete this exchange and its saved screen selection? Text already copied into Chat stays there.</p><button type="button" disabled={deleting} onClick={() => setDeleteId(null)}>Keep exchange</button><button type="button" disabled={deleting} onClick={() => void deleteExchange(item.id)}>{deleting ? "Deleting…" : "Delete exchange"}</button></div>}
       </div>)}
     </aside>}

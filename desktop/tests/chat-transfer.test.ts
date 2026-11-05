@@ -115,3 +115,26 @@ test("old Help imports gain missing visual anchors without replacing their origi
   original.messages[0].text = "A changed question with the same ID";
   assert.throws(() => mergeHelpSnapshot(old, snapshotFromHelp(original)), /message changed/);
 });
+
+test("assistant highlights survive Chat context, export, and enrichment of older transfers", () => {
+  const original = session();
+  const old = snapshotFromHelp(original);
+  const highlight = { id: "prior-1-1", kind: "rect" as const, x: 0.1, y: 0.2, width: 0.3, height: 0.4, label: "1" };
+  original.messages[1].marks = [highlight];
+  const incoming = snapshotFromHelp(original);
+  const assistant = incoming.conversation.explorations.root.messages[1];
+  assert.equal(assistant.sections[0].body, original.messages[1].text);
+  const annotations = assistant.sections.find((section) => section.id === "help-message-answer-1-marks");
+  assert.match(annotations!.body, /belong to this answer/);
+  assert.ok(annotations!.body.includes(JSON.stringify(highlight)));
+  const context = buildAnswerContext({ requestId: "highlight-follow-up", conversation: incoming.conversation, activeId: "root", question: "Explain the part you highlighted in your last answer", selection: null, mode: "auto", includeIds: [] });
+  const answerContext = context.payload.topics.flatMap((topic) => topic.messages).find((message) => message.id === assistant.id);
+  assert.ok(answerContext?.text.includes(JSON.stringify(highlight)), "the writer receives the assistant's selected highlight and geometry");
+  assert.deepEqual(parseSnapshot(serializeSnapshot(incoming)), incoming);
+  const merged = mergeHelpSnapshot(old, incoming);
+  assert.deepEqual(merged.conversation.explorations.root.messages, incoming.conversation.explorations.root.messages);
+  assert.deepEqual(mergeHelpSnapshot(merged, incoming), merged, "repeated handoff does not duplicate annotation metadata");
+  assert.equal(old.conversation.explorations.root.messages[1].sections.length, 1);
+  original.messages[1].text = "A replaced answer";
+  assert.throws(() => mergeHelpSnapshot(old, snapshotFromHelp(original)), /message changed/);
+});

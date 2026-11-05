@@ -11,11 +11,11 @@ export function snapshotFromHelp(session: HelpSession): Snapshot {
     const id = `help-message-${message.id}`;
     const source = session.source;
     const sections = [{ id: `${id}-text`, title: "", body: message.text }];
-    if (message.role === "user" && message.marks?.length) {
+    if (message.marks?.length) {
       const marks = validateMarks(message.marks);
       sections.push({
         id: `${id}-marks`, title: "Visual annotations",
-        body: "These marks belong to this question and the original shared image. Coordinates are normalized from 0 to 1, with the origin at the top left. Arrow width and height are signed offsets from the start to the tip.\n\n"
+        body: `These marks belong to this ${message.role === "user" ? "question" : "answer"} and the original shared image. Coordinates are normalized from 0 to 1, with the origin at the top left. Arrow width and height are signed offsets from the start to the tip.\n\n`
           + marks.map((mark, index) => `${index + 1}. ${JSON.stringify(mark)}`).join("\n"),
       });
     }
@@ -65,7 +65,7 @@ export function mergeHelpSnapshot(existing: Snapshot | null, incoming: Snapshot)
         // Older desktop imports did not retain visual marks. Enrich only an
         // otherwise identical message; never replace edited source text.
         const annotationId = `${message.id}-marks`;
-        const annotations = message.role === "user" ? message.sections.find((section) => section.id === annotationId && section.title === "Visual annotations") : undefined;
+        const annotations = message.sections.find((section) => section.id === annotationId && section.title === "Visual annotations");
         const withoutAnnotations = { ...message, sections: message.sections.filter((section) => section.id !== annotationId) };
         if (!annotations || JSON.stringify(previous) !== JSON.stringify(withoutAnnotations)) throw new Error("A Help message changed since it was saved. The existing chat has been kept.");
         previous.sections.push(structuredClone(annotations));

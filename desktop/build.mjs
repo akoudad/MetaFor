@@ -10,5 +10,5 @@ await Promise.all([
 ]);
 execFileSync("swiftc", ["-O", "desktop/native/SourceInfo.swift", "-o", "desktop-dist/native/source-info"], { stdio: "inherit" });
 await cp("desktop/assets", "desktop-dist/assets", { recursive: true });
-await writeFile("desktop-dist/package.json", JSON.stringify({ name: "metafor", version: "0.2.0", description: "Spatial conversations and assistance beside your work", author: "Karim Akoudad", main: "main.cjs" }, null, 2));
+await writeFile("desktop-dist/package.json", JSON.stringify({ name: "metafor", version: "0.2.1", description: "Spatial conversations and assistance beside your work", author: "Karim Akoudad", main: "main.cjs" }, null, 2));
 console.log("Metafor desktop bundle ready.");

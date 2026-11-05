@@ -88,3 +88,23 @@ test("atomic replacement preserves complete content and cleans up when replaceme
     assert.ok(!(await readdir(directory)).some((name) => name.endsWith(".tmp")));
   } finally { await cleanup(); }
 });
+
+test("unreadable history items do not hide healthy exchanges and remain recoverable or deletable", async () => {
+  const { directory, store, cleanup } = await fixture();
+  try {
+    const session = emptyHelp(); await store.save(session);
+    const broken = '{"private":"keep-the-original",';
+    await writeFile(path.join(directory, "help-broken.json"), broken);
+    await writeFile(path.join(directory, "help-wrong-id.json"), JSON.stringify({ ...session, id: "help-another" }));
+    await writeFile(path.join(directory, "help-oversized.json"), " ".repeat(16 * 1024 * 1024 + 1));
+    await writeFile(path.join(directory, ".invalid.json"), "unrelated file");
+    const items = await store.list();
+    assert.deepEqual(items[0], { id: session.id, title: session.title, updatedAt: session.updatedAt });
+    assert.deepEqual(items.slice(1), ["help-broken", "help-oversized", "help-wrong-id"].map((id) => ({ id, title: "Unreadable saved exchange", updatedAt: null, status: "unreadable" })));
+    assert.equal(await readFile(path.join(directory, "help-broken.json"), "utf8"), broken, "listing does not replace or discard the unreadable source");
+    await assert.rejects(store.get("help-broken"), /could not be read/);
+    await store.delete("help-broken");
+    assert.ok(!(await store.list()).some((item) => item.id === "help-broken"));
+    assert.deepEqual(await store.get(session.id), session);
+  } finally { await cleanup(); }
+});

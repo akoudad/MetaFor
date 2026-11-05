@@ -161,6 +161,34 @@ test("deleting a saved exchange requires confirmation, refreshes history, and cl
   assert.equal(ui.screen.queryByRole("textbox", { name: "Question about selected content" }), null);
 });
 
+test("unreadable history rows explain their state while healthy exchanges open and bad files can be deleted", async () => {
+  let broken = true;
+  bridge.listHelp = async () => [
+    { id: session.id, title: "Healthy exchange", updatedAt: now },
+    ...(broken ? [{ id: "help-broken", title: "Unreadable saved exchange", updatedAt: null, status: "unreadable" as const }] : []),
+  ];
+  bridge.resumeHelp = async (id) => { record("resume", id); return session; };
+  bridge.deleteHelp = async (id) => { record("delete", id); broken = false; };
+  ui.render(<Help />);
+  await ui.screen.findByRole("textbox", { name: "Question about selected content" });
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "History" }));
+  const unreadable = await ui.screen.findByRole("button", { name: /^Unreadable saved exchange/ });
+  assert.equal((unreadable as HTMLButtonElement).disabled, true);
+  assert.ok(ui.screen.getByText("Could not open · file kept unchanged"));
+  const healthy = ui.screen.getByRole("button", { name: /^Healthy exchange/ });
+  assert.equal((healthy as HTMLButtonElement).disabled, false);
+  ui.fireEvent.click(healthy);
+  await ui.waitFor(() => assert.deepEqual(calls.find((item) => item.name === "resume")?.value, "help-one"));
+  await ui.waitFor(() => assert.equal(ui.screen.queryByRole("complementary", { name: "Saved Help exchanges" }), null));
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "History" }));
+  ui.fireEvent.click(await ui.screen.findByRole("button", { name: "Delete Unreadable saved exchange" }));
+  assert.equal(calls.some((item) => item.name === "delete"), false);
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Delete exchange" }));
+  await ui.waitFor(() => assert.deepEqual(calls.find((item) => item.name === "delete")?.value, "help-broken"));
+  await ui.waitFor(() => assert.equal(ui.screen.queryByText("Unreadable saved exchange"), null));
+  assert.ok(ui.screen.getByRole("button", { name: /^Healthy exchange/ }));
+});
+
 test("a late reply cannot replace a newly selected source", async () => {
   let receive: (value: HelpSession) => void = () => {};
   let resolve: (value: HelpSession) => void = () => {};
@@ -178,6 +206,22 @@ test("a late reply cannot replace a newly selected source", async () => {
   });
   assert.equal(ui.screen.queryByText("Old answer must stay in its original exchange."), null);
   assert.ok(ui.screen.getByText("New source"));
+});
+
+test("a late initial session lookup cannot replace a new capture or erase its question", async () => {
+  let resolve!: (value: HelpSession) => void;
+  let receive!: (value: HelpSession) => void;
+  bridge.getHelpSession = () => new Promise((done) => { resolve = done; });
+  bridge.onHelpSession = (callback) => { receive = callback; return () => {}; };
+  ui.render(<Help />);
+  const next = { ...session, id: "help-new-capture", source: { ...session.source!, id: "new-source", title: "New capture" } };
+  ui.act(() => receive(next));
+  const question = await ui.screen.findByRole("textbox", { name: "Question about selected content" });
+  ui.fireEvent.change(question, { target: { value: "Question about my new capture" } });
+  await ui.act(async () => { resolve(session); });
+  assert.ok(ui.screen.getByText("New capture"));
+  assert.equal(ui.screen.queryByText("Diagram"), null);
+  assert.equal((question as HTMLTextAreaElement).value, "Question about my new capture");
 });
 
 test("drawing a mark opens its local editor; annotation submission preserves the footer draft and other marked questions", async () => {

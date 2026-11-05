@@ -66,6 +66,8 @@ and keeps the source visible beside the exchange.
 Each new capture starts a separate Help exchange. History reopens saved Help
 exchanges. **Open in Help** in Chat returns to the original Help transcript;
 later Chat answers remain in Chat.
+An unreadable saved exchange is labeled in History while other exchanges remain
+available. Its file stays unchanged unless you confirm deletion.
 To remove a saved crop and its Help transcript, open **History**, choose its
 delete control, and confirm. Text already copied into Chat remains there.
 **Stop sharing** starts a fresh exchange; it does not delete saved history.
@@ -80,6 +82,8 @@ Browser storage is not read or moved automatically; the original stays in your
 browser. `.ingx` preserves the conversation, topic connections, and saved view.
 
 Help exports also include source descriptions and visual annotation coordinates.
+Both your marks and the assistant's highlighted marks stay attached to their
+respective messages when continuing in Chat or exporting.
 The screenshot attachment stays in the desktop Help store: it is **not embedded
 in `.ingx`** and will not travel to a browser or another Mac with that file.
 File imports open a separate conversation without attaching any locally saved

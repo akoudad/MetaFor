@@ -31,6 +31,8 @@ let sourceInfo = { appName: "Screen", title: "Selected region" };
 let pendingConversation: string | null = null;
 let pendingSettings = false;
 let captureBusy = false;
+type CaptureAttempt = { restore: BrowserWindow[]; overlay: BrowserWindow | null };
+let captureAttempt: CaptureAttempt | null = null;
 let settingsBusy = false;
 let store: HelpStore;
 let credential = "";
@@ -189,56 +191,83 @@ function registerShortcut(value: string) {
 
 async function beginCapture() {
   if (captureBusy || selection) return;
+  if (settingsBusy) throw new Error("Wait for the current settings change before selecting a screen region.");
   if (helpRequests.size) throw new Error("Stop the current Help answer before choosing another source.");
+  const attempt: CaptureAttempt = { restore: [], overlay: null };
+  captureAttempt = attempt;
   captureBusy = true;
   try {
   if (!config.captureConsent) {
     const result = await dialog.showMessageBox({ type: "info", title: "Share a screen selection", message: "Choose exactly what Metafor Help sees", detail: "macOS will ask for Screen Recording permission. Metafor takes one still frame when you activate Help. Select a region and review it before Send. Only your selected crop is sent to your configured AI provider. There is no continuous screen sharing or computer control.", buttons: ["Choose a region", "Cancel"], defaultId: 0, cancelId: 1 });
-    if (result.response !== 0) return;
+    if (captureAttempt !== attempt) return;
+    if (result.response !== 0) { clearCapture(attempt, true); return; }
     config.captureConsent = true; await atomicWrite(preferenceFile(), JSON.stringify(config));
   }
+    if (captureAttempt !== attempt) return;
     const target = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    help?.hide();
     // Hide our own windows before taking the one-shot still frame.
-    const wasChatVisible = chat?.isVisible();
-    if (wasChatVisible) chat?.hide();
+    attempt.restore = [chat, help].filter((window): window is BrowserWindow => !!window && !window.isDestroyed() && window.isVisible());
+    for (const window of attempt.restore) window.hide();
     await new Promise((resolve) => setTimeout(resolve, 180));
+    if (captureAttempt !== attempt) return;
     try {
       const helper = path.join(__dirname, "native", "source-info");
       const result = await run(helper, ["--exclude-pid", String(process.pid)], { timeout: 2000, maxBuffer: 8192 });
       const info = JSON.parse(result.stdout); sourceInfo = { appName: String(info.appName || "Screen").slice(0, 300), title: String(info.windowTitle || "Selected region").slice(0, 500) };
     } catch { sourceInfo = { appName: "Screen", title: "Selected region" }; }
+    if (captureAttempt !== attempt) return;
     let sources;
     try { sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: Math.min(3200, Math.round(target.size.width * target.scaleFactor)), height: Math.min(2400, Math.round(target.size.height * target.scaleFactor)) } }); }
     catch { throw new Error("Allow Metafor in System Settings → Privacy & Security → Screen Recording, then quit and reopen Metafor. Your screen has not been sent."); }
+    if (captureAttempt !== attempt) return;
     const source = sources.find((s) => s.display_id === String(target.id));
     if (systemPreferences.getMediaAccessStatus("screen") !== "granted" || !source || source.thumbnail.isEmpty()) throw new Error("The display could not be captured. Allow Metafor in System Settings → Privacy & Security → Screen Recording, then quit and reopen Metafor. Your screen has not been sent.");
     captureDisplay = target;
     const size = source.thumbnail.getSize();
     capture = { image: source.thumbnail.toDataURL(), width: size.width, height: size.height, displayId: String(target.id) };
     selection = new BrowserWindow({ ...target.bounds, frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false, movable: false, backgroundColor: "#000", webPreferences: { preload: path.join(__dirname, "preload.cjs"), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    attempt.overlay = selection;
     secureWindow(selection); selection.setAlwaysOnTop(true, "screen-saver");
     selection.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    selection.on("closed", () => { selection = null; capture = null; captureDisplay = null; });
-    await selection.loadURL("metafor://app/index.html?surface=selection");
-    selection.focus();
-  } catch (error) { showHelp(); throw error; }
-  finally { captureBusy = false; }
+    selection.on("closed", () => clearCapture(attempt, true));
+    selection.webContents.on("render-process-gone", () => {
+      if (captureAttempt !== attempt) return;
+      clearCapture(attempt, true);
+      if (!quitting) nativeError(new Error("The screen selection stopped unexpectedly. Your screen was not sent. Try again."));
+    });
+    try { await selection.loadURL("metafor://app/index.html?surface=selection"); }
+    catch (error) { throw new Error("The screen selection could not open. Your screen was not sent. Try again.", { cause: error }); }
+    if (captureAttempt === attempt) attempt.overlay.focus();
+  } catch (error) {
+    if (captureAttempt !== attempt) return;
+    clearCapture(attempt, true); throw error;
+  } finally { if (captureAttempt === attempt) captureBusy = false; }
+}
+
+function clearCapture(attempt: CaptureAttempt, restore: boolean) {
+  if (captureAttempt !== attempt) return;
+  captureAttempt = null; captureBusy = false;
+  selection = null; capture = null; captureDisplay = null;
+  if (attempt.overlay && !attempt.overlay.isDestroyed()) attempt.overlay.close();
+  if (restore && !quitting) for (const window of attempt.restore) {
+    if (!window.isDestroyed()) window.showInactive();
+  }
 }
 
 async function selectRegion(rect: CropRect) {
-  if (!capture || !captureDisplay) throw new Error("The screen selection expired. Capture again.");
+  if (!capture || !captureDisplay || !captureAttempt) throw new Error("The screen selection expired. Capture again.");
   const pixel = cropToPixels(rect, capture.width, capture.height);
   if (pixel.width < 8 || pixel.height < 8) throw new Error("Select a slightly larger area.");
   const image = nativeImage.createFromDataURL(capture.image).crop(pixel);
   const display = captureDisplay;
   const region = { x: display.bounds.x + pixel.x / capture.width * display.bounds.width, y: display.bounds.y + pixel.y / capture.height * display.bounds.height, width: pixel.width / capture.width * display.bounds.width, height: pixel.height / capture.height * display.bounds.height };
-  currentHelp = emptyHelp();
-  currentHelp.source = { id: crypto.randomUUID(), image: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}`, width: pixel.width, height: pixel.height, appName: sourceInfo.appName, title: sourceInfo.title, capturedAt: new Date().toISOString() };
-  currentHelp.title = `About ${sourceInfo.appName}`;
-  // Full-screen pixels are discarded after cropping. Unsended crops remain in memory only.
-  selection?.close(); capture = null; captureDisplay = null;
+  const nextHelp = emptyHelp();
+  nextHelp.source = { id: crypto.randomUUID(), image: `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}`, width: pixel.width, height: pixel.height, appName: sourceInfo.appName, title: sourceInfo.title, capturedAt: new Date().toISOString() };
+  nextHelp.title = `About ${sourceInfo.appName}`;
   const panel = createHelp(); panel.setBounds(placeHelpPanel(region, display.workArea, { width: 440, height: Math.min(780, display.workArea.height - 40) }));
+  currentHelp = nextHelp;
+  // Full-screen pixels are discarded after cropping. Unsended crops remain in memory only.
+  clearCapture(captureAttempt, false);
   showHelp(); broadcastHelp();
 }
 
@@ -255,6 +284,7 @@ function installIPC() {
   handle("settings", ["chat", "help"], settings);
   handle("save-settings", ["chat"], async (input) => {
     if (credentialLoading) throw new Error(loadingMessage);
+    if (captureBusy) throw new Error("Finish the screen capture before changing settings.");
     if (settingsBusy) throw new Error("Wait for the current settings change to finish.");
     const next = validateModelConfig(input);
     if (input.apiKey !== undefined && (typeof input.apiKey !== "string" || input.apiKey.length > 4096 || /[\r\n\0]/.test(input.apiKey))) throw new Error("The API key is invalid.");
@@ -304,7 +334,7 @@ function installIPC() {
   handle("capture", ["chat", "help"], beginCapture);
   handle("get-capture", ["selection"], () => capture);
   handle("select-capture", ["selection"], selectRegion);
-  handle("cancel-capture", ["selection"], () => { selection?.close(); showHelp(); });
+  handle("cancel-capture", ["selection"], () => { if (captureAttempt) clearCapture(captureAttempt, true); });
   handle("help-session", ["help"], () => currentHelp);
   handle("list-help", ["chat", "help"], () => store.list());
   handle("get-help", ["chat", "help"], (id) => currentHelp.id === id ? currentHelp : typeof id === "string" && id.startsWith("help-") ? store.get(id) : null);
