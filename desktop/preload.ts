@@ -12,6 +12,7 @@ const bridge: DesktopBridge = {
   listModels: () => invoke("list-models"), selectModel: (id) => invoke("select-model", id),
   getSettings: () => invoke("settings"), saveSettings: (settings) => invoke("save-settings", settings), removeKey: () => invoke("remove-key"),
   openSettings: () => invoke("open-settings"), openHelp: () => invoke("open-help"), hideHelp: () => invoke("hide-help"), setHelpLayout: (layout) => invoke("set-help-layout", layout),
+  onboardingComplete: () => invoke("onboarding-complete"), completeOnboarding: () => invoke("complete-onboarding"), onOpenOnboarding: (cb) => subscribe("open-onboarding", cb),
   captureScreen: (mode) => invoke("capture", mode), getCapture: () => invoke("get-capture"), selectCapture: (rect) => invoke("select-capture", rect), cancelCapture: () => invoke("cancel-capture"),
   showGuidance: (request) => invoke("show-guidance", request), getGuidance: () => invoke("get-guidance"), closeGuidance: () => invoke("close-guidance"),
   onGuidanceChanged: (callback) => subscribe("guidance-changed", callback),

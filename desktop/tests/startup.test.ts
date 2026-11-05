@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
   const providerRequests: { url: string; authorization: string | null; body?: any }[] = [];
   let initialized = Promise.resolve();
   let quit = false;
+  let menu: any[] = [];
   const locations: Record<string, string> = { appData: directory, userData: directory };
   class TestWindow extends EventEmitter {
     webContents = Object.assign(new EventEmitter(), {
@@ -48,7 +49,7 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
       whenReady: () => ({ then: (fn: () => Promise<void>) => { initialized = Promise.resolve().then(fn); return initialized; } }),
     }),
     BrowserWindow: TestWindow,
-    Menu: { buildFromTemplate: (items: unknown) => items, setApplicationMenu() {} },
+    Menu: { buildFromTemplate: (items: unknown) => items, setApplicationMenu(items: any[]) { menu = items; } },
     Tray: class { setToolTip() {} setContextMenu() {} },
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     protocol: { registerSchemesAsPrivileged() {}, handle() {} },
@@ -92,7 +93,7 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
     return handlers.get(`metafor:${name}`)!({ sender, senderFrame: sender.mainFrame }, ...received);
   };
   if (!(decryptedKey instanceof Promise)) await until(async () => !(await call("settings")).credentialLoading);
-  return { windows, alerts, shortcuts, call, quit, providerRequests };
+  return { windows, alerts, shortcuts, call, quit, providerRequests, openQuickStart: () => menu[0].submenu.find((item: any) => item.label === "Quick start…").click() };
 }
 
 async function until(check: () => Promise<boolean>) {
@@ -105,6 +106,43 @@ async function profile(action: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "metafor-startup-"));
   try { await action(directory); } finally { await rm(directory, { recursive: true, force: true }); }
 }
+
+test("quick start completion survives relaunch without changing settings, keys, or Help history", async () => profile(async (directory) => {
+  const preferences = JSON.stringify(valid);
+  await writeFile(path.join(directory, "preferences.json"), preferences);
+  await writeFile(path.join(directory, "credential.enc"), "unchanged-encrypted-key");
+  const store = new HelpStore(path.join(directory, "Help"));
+  const exchange = emptyHelp(); await store.save(exchange);
+  const runtime = await start(directory, {}, false, "retained-key");
+  assert.equal(await runtime.call("onboarding-complete"), false);
+  assert.equal(runtime.windows.length, 1, "quick start uses Chat rather than another native window");
+  await runtime.call("complete-onboarding");
+  assert.equal(await runtime.call("onboarding-complete"), true);
+  const relaunched = await start(directory, {}, false, "retained-key");
+  assert.equal(await relaunched.call("onboarding-complete"), true);
+  relaunched.openQuickStart();
+  assert.ok(relaunched.windows[0].sent.includes("metafor:open-onboarding"));
+  assert.equal(await readFile(path.join(directory, "preferences.json"), "utf8"), preferences);
+  assert.equal(await readFile(path.join(directory, "credential.enc"), "utf8"), "unchanged-encrypted-key");
+  assert.deepEqual(await store.get(exchange.id), exchange);
+  assert.equal(runtime.providerRequests.length, 0);
+}));
+
+test("unreadable quick start state leaves Chat usable and a failed completion reports a retry", async () => profile(async (directory) => {
+  await writeFile(path.join(directory, "onboarding.json"), "invalid-state");
+  const runtime = await start(directory);
+  assert.equal(await runtime.call("onboarding-complete"), false);
+  assert.equal(runtime.quit, false);
+  assert.deepEqual(runtime.alerts, []);
+  assert.equal(await readFile(path.join(directory, "onboarding.json"), "utf8"), "invalid-state");
+  await rm(path.join(directory, "onboarding.json"));
+  await mkdir(path.join(directory, "onboarding.json"));
+  await assert.rejects(runtime.call("complete-onboarding"), /Quick start could not be saved/);
+  assert.equal(runtime.quit, false);
+  await rm(path.join(directory, "onboarding.json"), { recursive: true });
+  await runtime.call("complete-onboarding");
+  assert.equal(await runtime.call("onboarding-complete"), true);
+}));
 
 test("unreadable preferences and encrypted key cannot block Chat or overwrite existing files", async () => profile(async (directory) => {
   await writeFile(path.join(directory, "preferences.json"), "{private-corrupt-settings");

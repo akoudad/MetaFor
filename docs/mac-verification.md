@@ -1,9 +1,25 @@
 # Mac verification — 2026-11-05
 
 Desktop worktree: `metafor-mac`, branch `feat/macos-app`.
-The original web checkout remains unchanged.
 
-## Current build: 0.4.4
+## Current build: 0.4.8 — first-open guide
+
+The native Chat window introduces Chat and Help on first open, including the
+Option + M toggle and API-key setup. Completion is saved separately from model
+settings and conversation storage. The app menu can reopen the guide. Settings
+recovery takes priority, and the guide does not raise Chat during Help use.
+
+All 208 desktop tests pass, including first-open persistence, a failed state
+write and retry, settings precedence, keyboard focus, and existing Help-only
+activation/capture tests. All 248 web conversation tests, TypeScript, the desktop
+bundle, and the Apple silicon DMG build pass. The packaged app reports 0.4.8 and
+contains the guide. Recursive strict signature verification and `hdiutil verify`
+pass. The
+rendered guide was checked in isolated headless Chrome using the built desktop
+renderer, with a fixture bridge and no real screen capture or user profile.
+The app was not launched or installed during this check.
+
+## Earlier build: 0.4.4
 
 - All 193 desktop tests and 248 web conversation tests pass; TypeScript and
   `git diff --check` pass.
@@ -191,10 +207,11 @@ Synthetic and mocked checks do not establish these hardware and accuracy claims.
 
 ## Artifact
 
-`artifacts/mac/Metafor-0.4.3-arm64.dmg`
+`artifacts/mac/Metafor-0.4.8-arm64.dmg`
 
-SHA-256: `730cf207b53091eddf24dd3408cbfdcc461a7174fd1f351ed78f1bf0639d914e`
+SHA-256: `224c6c9fdcd6b2a3d44642ca78d2113a82fc5422e4800a0638eae17b3804841e`
 
-This is a local ad-hoc signed preview, not a Developer ID signed or notarized
-public release. Signing verification checks package integrity; it does not
-establish Gatekeeper approval or completion of the remaining native checks.
+The Apple silicon build requires macOS 26 or later because of its native helper
+deployment target. This preview is ad-hoc signed, not Developer ID signed or
+notarized. Signing verification checks package integrity; it does not establish
+Gatekeeper approval or completion of the remaining native checks.

@@ -36,7 +36,9 @@ npm ci
 npm run desktop:dev
 ```
 
-Open **Metafor → Settings…** (`⌘,`) and add your API key. Meta is the default
+On first open, a brief guide introduces Chat and Help. Choose **Open settings**
+to add your API key, or return through **Metafor → Settings…** (`⌘,`). Reopen the
+guide with **Metafor → Quick start…**. Meta is the default
 provider. The model chooser applies to both Chat and Help. Allow macOS Screen
 Recording when using Help.
 

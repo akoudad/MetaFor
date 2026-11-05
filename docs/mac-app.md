@@ -14,11 +14,20 @@ This desktop work lives in the separate `metafor-mac` worktree on
 ## Install and connect
 
 1. Open the generated DMG and drag **Metafor** into **Applications**.
-2. Open Metafor, then **Metafor → Settings…** (`⌘,`). Enter your API key.
+2. Open Metafor. The first-open guide introduces Chat, Help, and the **Option + M**
+   shortcut. Choose **Open settings** and enter your API key. Settings remains
+   available from **Metafor → Settings…** (`⌘,`).
 3. The default provider is Meta, with model `muse-spark-1.3` and API base
    `https://api.meta.ai/v1`. Save settings, then ask a question in Chat.
    The chooser below the prompt switches the model and reasoning level for both
    Chat and Help. **Balanced** is the default; see [model choices](model-selection.md).
+
+**Get started** dismisses the guide without requiring setup. It stays dismissed
+on later launches; **Metafor → Quick start…** opens it again. Completion is stored
+in `onboarding.json` in the app's user-data directory, separately from settings,
+credentials, and conversation history. If saving fails, retry or choose **Close
+for now**. The guide appears inside Chat and never opens Chat when Help is active.
+Existing settings or Keychain recovery messages take priority over the guide.
 
 The current packaging signs the app and its bundled helper with a local ad-hoc
 signature. Hardened Runtime is disabled for this development build. It is **not

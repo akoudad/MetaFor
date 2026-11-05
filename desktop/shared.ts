@@ -91,6 +91,9 @@ export interface DesktopBridge {
   saveSettings(settings: { apiKey?: string; model: string; baseURL: string; shortcut: string }): Promise<DesktopSettings>;
   removeKey(): Promise<DesktopSettings>;
   openSettings(): Promise<void>;
+  onboardingComplete(): Promise<boolean>;
+  completeOnboarding(): Promise<void>;
+  onOpenOnboarding(callback: () => void): () => void;
   openHelp(): Promise<void>;
   hideHelp(): Promise<void>;
   setHelpLayout(layout: { expanded: boolean; height?: number }): Promise<void>;

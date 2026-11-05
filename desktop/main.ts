@@ -45,6 +45,7 @@ let captureSource: HelpSource | null = null;
 let sourceInfo = { appName: "Screen", title: "Selected region" };
 let pendingConversation: string | null = null;
 let pendingSettings = false;
+let pendingOnboarding = false;
 let captureBusy = false;
 type CaptureAttempt = { restore: BrowserWindow[]; overlay: BrowserWindow | null };
 let captureAttempt: CaptureAttempt | null = null;
@@ -263,6 +264,7 @@ function reopenCurrentMode() {
 }
 function broadcastHelp() { help?.webContents.send("metafor:help-session", currentHelp); chat?.webContents.send("metafor:help-session", currentHelp); }
 function showSettings() { pendingSettings = true; const win = createChat(); if (!win.webContents.isLoading()) { win.webContents.send("metafor:open-settings"); pendingSettings = false; } }
+function showOnboarding() { pendingOnboarding = true; const win = createChat(); if (!win.webContents.isLoading()) { win.webContents.send("metafor:open-onboarding"); pendingOnboarding = false; } }
 function nativeError(error: unknown) { const message = error instanceof Error ? error.message : "The operation could not be completed."; dialog.showErrorBox("Metafor", message); }
 
 function registerShortcut(value: string) {
@@ -518,6 +520,17 @@ function handle(name: string, surfaces: ("chat" | "help" | "selection" | "guidan
 }
 
 function installIPC() {
+  handle("onboarding-complete", ["chat"], async () => {
+    try { return JSON.parse(await readFile(path.join(app.getPath("userData"), "onboarding.json"), "utf8"))?.completed === true; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("Metafor quick start state could not be read; the guide will be shown again.");
+      return false;
+    }
+  });
+  handle("complete-onboarding", ["chat"], async () => {
+    try { await atomicWrite(path.join(app.getPath("userData"), "onboarding.json"), JSON.stringify({ completed: true })); }
+    catch { throw new Error("Quick start could not be saved. Try again, or close it for now."); }
+  });
   handle("settings", ["chat", "help"], settings);
   handle("list-models", ["chat", "help"], listModels);
   handle("select-model", ["chat", "help"], async (choiceId) => {
@@ -690,6 +703,7 @@ function installIPC() {
     if (event.sender === chat?.webContents) {
       chatReady = true;
       if (pendingConversation) { event.sender.send("metafor:open-conversation", pendingConversation); pendingConversation = null; }
+      if (pendingOnboarding) { event.sender.send("metafor:open-onboarding"); pendingOnboarding = false; }
       if (pendingSettings) { event.sender.send("metafor:open-settings"); pendingSettings = false; }
     }
     if (event.sender === help?.webContents) broadcastHelp();
@@ -727,7 +741,7 @@ else {
     installIPC();
     shortcutRegistered = registerShortcut(config.shortcut);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { label: "Metafor", submenu: [{ role: "about" }, { label: "Settings…", accelerator: "CmdOrCtrl+,", click: showSettings }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
+      { label: "Metafor", submenu: [{ role: "about" }, { label: "Quick start…", click: showOnboarding }, { label: "Settings…", accelerator: "CmdOrCtrl+,", click: showSettings }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
       { label: "File", submenu: [{ label: "Metafor Chat", accelerator: "CmdOrCtrl+1", click: () => createChat() }, { label: "Metafor Help", accelerator: "CmdOrCtrl+2", click: showHelp }, { label: "Use Current Screen…", click: () => void beginCapture().catch(nativeError) }, { label: "Select Screen Region…", click: () => void beginCapture("region").catch(nativeError) }, { type: "separator" }, { label: "Import Conversation…", accelerator: "CmdOrCtrl+O", click: () => void importConversation().catch(nativeError) }, { role: "close" }] },
       { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
     ]));
