@@ -51,6 +51,7 @@ export type AnswerResult = {
 
 export type ModelStatus = {
   configured: boolean;
+  credentialLoading?: boolean;
   model: string;
   accessCodeRequired: boolean;
 };

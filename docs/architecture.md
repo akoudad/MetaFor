@@ -159,6 +159,10 @@ resize, navigation, or dismissal removes the action to avoid a stale screen anch
    in original order within its group. It may write titles, summaries, a short
    placement reason, and an overview; it cannot rewrite substantive section text.
    Both calls receive resolved selected text and each annotation's own question.
+   An unanswered root is explicitly marked as the first answer so both models
+   establish its subject title. If the organizer repeats the initial label, keep
+   the writer's title; if both repeat it, use the bounded question. Later replies
+   retain the established title.
    Selection defines pronoun scope; wider history only helps interpret it. Detailed
    independent subjects need separate writer sections for the organizer to assign.
    Validate complete coverage, unique assignments, supplied targets, and bounds.

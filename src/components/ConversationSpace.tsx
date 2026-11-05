@@ -27,6 +27,14 @@ type TopicTransition = { key: string; fromId: string; toId: string; toIds?: stri
 type SelectionPreview = { source: SourceReference; x: number; y: number };
 const INITIAL_VIEW = { x: 0, y: 0, z: 900 };
 
+export type DesktopChatBridge = {
+  onOpenConversation: (callback: (content: string) => void) => () => void;
+  prepareImport: (content: string) => Promise<Snapshot>;
+  onConversationChanged: (id: string) => void;
+  openHelp: () => void;
+  openSettings: () => void;
+};
+
 function selectedAnswerText(range: Range): string {
   const fragment = range.cloneContents();
   fragment.querySelectorAll("[data-no-selection]").forEach((element) => element.remove());
@@ -39,10 +47,11 @@ function selectedAnswerText(range: Range): string {
   return normalizeText(textOf(fragment));
 }
 
-export default function ConversationSpace() {
+export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBridge } = {}) {
   const [space, setSpace] = useState(createConversation);
   const [ready, setReady] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [desktopImports, setDesktopImports] = useState<string[]>([]);
   const switchingNow = useRef(false);
   const [started, setStarted] = useState(false);
   const [activeId, setActiveId] = useState(space.rootId);
@@ -271,6 +280,40 @@ export default function ConversationSpace() {
     } catch (error) { setStatusError(error instanceof Error ? error.message : "Model connection is unavailable."); }
   }, []);
   useEffect(() => { void refreshStatus(); }, [refreshStatus]);
+  useEffect(() => {
+    if (!desktop) return;
+    const refresh = () => { void refreshStatus(); };
+    window.addEventListener("metafor-settings-changed", refresh);
+    return () => window.removeEventListener("metafor-settings-changed", refresh);
+  }, [desktop, refreshStatus]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    return desktop.onOpenConversation((content) => setDesktopImports((current) => [...current, content]));
+  }, [desktop]);
+  useEffect(() => {
+    if (ready) desktop?.onConversationChanged(space.id);
+  }, [desktop, ready, space.id]);
+  useEffect(() => {
+    const incoming = desktopImports[0];
+    if (!desktop || !incoming || !ready || switchingNow.current || switching || (pending && !pending.error)) return;
+    switchingNow.current = true; setSwitching(true);
+    void (async () => {
+      try {
+        // Save first: opening Help must never replace the current chat or draft.
+        const current = snapshotNow.current();
+        if (current.view.started || Object.values(current.view.places).some((place) => place.draft || place.annotations?.length)) await saveSnapshot(current);
+        const next = await desktop.prepareImport(incoming);
+        await saveSnapshot(next);
+        restore(next);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not open this conversation. Your current chat is kept.");
+      } finally {
+        setDesktopImports((current) => current.slice(1));
+        switchingNow.current = false; setSwitching(false);
+      }
+    })();
+  }, [desktop, desktopImports, ready, switching, pending]);
 
   useEffect(() => {
     if (!ready || (!started && !draft && !annotations.length)) return;
@@ -983,6 +1026,8 @@ export default function ConversationSpace() {
     <header className="topbar">
       <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metafor</button>
       <div className="top-actions">
+        {desktop && <button onClick={desktop.openHelp}>Help</button>}
+        {desktop && <button onClick={desktop.openSettings}>Settings</button>}
         <button onClick={() => void openFresh()} disabled={!ready || switching || Boolean(pending && !pending.error)}>New chat</button>
         <button onClick={() => { setSavedChats(!savedChats); setMenu(false); }} disabled={!ready || switching} aria-expanded={savedChats}>Saved chats</button>
         {started && <button onClick={showOverview} aria-label="Conversation map" title="Conversation map · 0">Conversation map</button>}
@@ -993,7 +1038,7 @@ export default function ConversationSpace() {
     {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll inside a topic to read. Scroll in empty space down to explore details, or up toward the parent and overview. When several paths appear, choose a title in the graph. Reading inside a topic never changes your place in the graph.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, and write a question. Select another passage to queue the first annotation. Send them together for separate linked replies.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Back returns to your previous view. The breadcrumb names take you up the topic hierarchy. Conversation map shows the whole conversation. Hover or focus a dot to preview its title. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 opens the conversation map.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
     {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
       <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
-      <p className="panel-explainer">Saved in this browser.</p>
+      <p className="panel-explainer">{desktop ? "Saved on this Mac." : "Saved in this browser."}</p>
       {libraryWarning && <p className="panel-explainer" role="status">{libraryWarning}</p>}
       <div className="saved-spaces">{library.length ? library.map((item) => <button key={item.id} onClick={() => void openSaved(item.id)} disabled={switching || Boolean(pending && !pending.error)} aria-current={item.id === space.id ? "page" : undefined}>{item.title}<small>{new Date(item.savedAt).toLocaleDateString()}</small></button>) : <p>No saved chats yet.</p>}</div>
     </aside>}
@@ -1004,7 +1049,7 @@ export default function ConversationSpace() {
       <div className="menu-rule" />
       <button onClick={() => fileInput.current?.click()} disabled={Boolean(pending && !pending.error)}>Open .ingx</button>
       <button onClick={exportFile} disabled={!started && !draft}>Export .ingx</button>
-      <div className="menu-rule" /><p className="model-status">{statusError || (modelStatus?.configured ? `${modelStatus.model} configured` : "Add MODEL_API_KEY in .env.local to connect Meta.")}</p><button onClick={() => void refreshStatus()}>Check connection</button>
+      <div className="menu-rule" /><p className="model-status">{statusError || (desktop && modelStatus?.credentialLoading ? "Waiting for macOS Keychain…" : modelStatus?.configured ? `${modelStatus.model} configured` : desktop ? "Add your model key in Settings to connect." : "Add MODEL_API_KEY in .env.local to connect Meta.")}</p><button onClick={() => void refreshStatus()}>Check connection</button>
       {modelStatus?.accessCodeRequired && <button onClick={() => { setShowAccess(true); setMenu(false); }}>Demo access code</button>}
     </aside>}
     {connections && <aside className="connections-panel"><div className="panel-heading"><span>Connections</span><button onClick={() => setConnections(false)} aria-label="Close connections">×</button></div><p className="panel-explainer">Arrows show where a discussion began. Related topics can be included in your next question.</p>

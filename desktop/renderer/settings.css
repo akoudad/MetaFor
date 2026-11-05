@@ -1,0 +1,6 @@
+.desktop-settings-shade{position:fixed;inset:0;background:#000a;z-index:1500;display:grid;place-items:center;font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#ddd}
+.desktop-settings{width:min(460px,calc(100vw - 70px));max-height:85vh;overflow:auto;background:#101011;border:1px solid #333;border-radius:16px;padding:28px}
+.desktop-settings header{display:flex;align-items:center;justify-content:space-between}.desktop-settings h1{font-size:22px;font-weight:450;margin:0}.desktop-settings header button{font-size:24px}
+.desktop-settings p{color:#999}.desktop-settings label{display:block;margin:18px 0 0;color:#bbb;font-size:12px}
+.desktop-settings input{display:block;box-sizing:border-box;width:100%;padding:10px 12px;margin-top:6px;background:#191919;border:1px solid #333;border-radius:6px;color:#eee;font:14px system-ui}.desktop-settings input:focus{outline:1px solid #888}
+.desktop-settings .settings-note{font-size:11px;color:#777}.desktop-settings .settings-error{color:#eab3a6;font-size:12px}.desktop-settings footer{display:flex;justify-content:flex-end;gap:14px;margin-top:20px}.desktop-settings button{color:#ccc;background:none;border:0;padding:8px;cursor:pointer}.desktop-settings button[type=submit]{border:1px solid #555;border-radius:6px;padding:9px 15px}

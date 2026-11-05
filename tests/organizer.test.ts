@@ -3,6 +3,7 @@ import test from "node:test";
 import type { AnswerRequest, AnswerResult } from "../src/lib/contracts";
 import { createConversation, applyAnswer } from "../src/lib/session";
 import { answerSections, organizeAnswer, organizerMessages } from "../src/lib/organizer";
+import { buildAnswerContext } from "../src/lib/ai";
 
 function fixture() {
   const conversation = createConversation();
@@ -31,6 +32,31 @@ test("organizer can retain a single coherent answer with several headings", () =
   const result = organizeAnswer(plan, request, answer);
   assert.deepEqual(result.sections, answer.sections);
   assert.deepEqual(result.topics, []);
+});
+
+test("the first answer names the conversation even if the organizer repeats its empty label", () => {
+  const { request, answer, plan } = fixture();
+  plan.topics = []; plan.primary.sectionIds = ["s0", "s1"];
+  plan.primary.title = request.conversation.explorations.root.title;
+  assert.equal(buildAnswerContext(request).payload.isFirstAnswer, true);
+  assert.equal(JSON.parse(organizerMessages(request, answer)[1].content).isFirstAnswer, true);
+  const result = organizeAnswer(plan, request, answer);
+  const applied = applyAnswer(request.conversation, request, result);
+  assert.equal(applied.conversation.title, answer.title);
+  assert.equal(applied.conversation.explorations.root.title, answer.title);
+  assert.deepEqual(result.sections, answer.sections, "title recovery never changes the answer content");
+});
+
+test("an unchanged first-turn label falls back to the question while later titles remain established", () => {
+  const { request, answer, plan } = fixture();
+  plan.topics = []; plan.primary.sectionIds = ["s0", "s1"];
+  answer.title = plan.primary.title = request.conversation.explorations.root.title;
+  assert.equal(organizeAnswer(plan, request, answer).title, request.question);
+  request.conversation.explorations.root.messages.push({ id: "prior-answer", role: "assistant", sections: [{ id: "prior-text", title: "Overview", body: "Existing answer." }] });
+  answer.title = "A new writer suggestion";
+  assert.equal(buildAnswerContext(request).payload.isFirstAnswer, false);
+  assert.equal(JSON.parse(organizerMessages(request, answer)[1].content).isFirstAnswer, false);
+  assert.equal(organizeAnswer(plan, request, answer).title, plan.primary.title);
 });
 
 test("organizer rejects dropped, duplicated, invented and empty section groups", () => {

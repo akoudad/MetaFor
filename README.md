@@ -57,3 +57,18 @@ Optional live checks make paid calls: `scripts/live-smoke.ts` uses up to six;
 configured local server. See the [demo instructions](docs/demo.md).
 
 Voice, collaboration, and cloud sync are outside this build.
+
+## macOS app
+
+The separate `metafor-mac` worktree adds an Electron app with the same spatial
+Chat and a floating **Help** window for questions about a screen selection.
+Run `npm run desktop:dev`; package an Apple silicon installer with
+`npm run desktop:dmg`. Drag Metafor from the DMG into Applications and add your
+API key in Settings. This local build is ad-hoc signed, not Developer ID signed or notarized.
+
+Browser chats stay in the browser. Move them using `.ingx` export and
+**File → Import Conversation**. Help sends the approved frozen crop on Send
+and on follow-ups in its linked Chat; it does not continuously watch or control
+your computer. Help screenshots stay in desktop storage and are not included in
+`.ingx` exports. See the [Mac app guide](docs/mac-app.md) for setup, privacy,
+build commands, and current limits.
