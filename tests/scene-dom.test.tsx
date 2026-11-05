@@ -40,6 +40,7 @@ test("the real scene preserves readers, animates and interrupts arrivals, honors
       nodes: [source], links: [] as SpatialLink[], activeId: source.id,
       view: start, reducedMotion: false, transition: null as SpatialTransition | null,
       visibleIds: undefined as string[] | undefined,
+      fullDetailIds: undefined as string[] | undefined,
     };
     const content = () => <SpatialWorld {...state} onViewChange={(view) => { rendered = view; }}>
       {(node) => <article><div data-reader-id={node.id} style={{ height: 100, overflow: "auto" }}><p style={{ height: 1000 }}>{node.id}</p></div></article>}
@@ -125,6 +126,20 @@ test("the real scene preserves readers, animates and interrupts arrivals, honors
     assert.equal(childCard.inert, false);
     assert.equal(childCard.hasAttribute("aria-hidden"), false);
     assert.equal(lines[0].style.visibility, "visible");
+
+    const compactDetail = childCard.dataset.detail;
+    assert.notEqual(compactDetail, "full");
+    update({ fullDetailIds: [source.id, child.id] });
+    tick();
+    assert.equal(sourceCard.dataset.detail, "full");
+    assert.equal(childCard.dataset.detail, "full", "explicit annotation readers remain readable below ordinary detail thresholds");
+    assert.notEqual(secondCard.dataset.detail, "full");
+    assert.deepEqual(rendered, overview);
+    assert.equal(dom.window.document.querySelector('[data-reader-id="child"]'), childReader);
+    assert.equal(childReader.scrollTop, 173);
+    update({ fullDetailIds: undefined });
+    tick();
+    assert.equal(childCard.dataset.detail, compactDetail);
 
     const batch = [
       { id: "paris", position: { x: -380, y: -840, z: -420 } },

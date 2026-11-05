@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Conversation, Exploration, Message, SourceReference } from "@/lib/model";
 import { getDepth, getChildren, getSectionChildren } from "@/lib/model";
+import type { AnnotationRequest } from "@/lib/contracts";
 import AnswerBody from "./AnswerBody";
 
 type TopicCardProps = {
@@ -8,6 +9,7 @@ type TopicCardProps = {
   item: Exploration;
   active: boolean;
   selection: SourceReference | null;
+  annotations?: AnnotationRequest[];
   pendingQuestion?: string;
   pendingError?: string;
   readingRef: (element: HTMLDivElement | null) => void;
@@ -70,12 +72,13 @@ export default function TopicCard(props: TopicCardProps) {
       {!item.source && item.parentId && <button className="branch-link" onClick={() => props.onOpen(item.parentId!)}>Back to {space.explorations[item.parentId]?.title} <span>↗</span></button>}
       {sources.length > 0 && <div className="synthesis-sources" data-no-selection><span>Combines</span>{sources.map((link) => <button key={link.id} onClick={() => props.onOpen(link.from)}>{space.explorations[link.from].title} ↗</button>)}</div>}
       {item.messages.map((message) => message.role === "user" ? <div key={message.id}>
-        {message.source?.quote && message.source.quote !== item.source?.quote && <blockquote className="source-quote"><button onClick={() => props.onSource(message.source!)}>Selected passage ↗</button><p>{message.source.quote}</p></blockquote>}
+        {message.source && JSON.stringify(message.source) !== JSON.stringify(item.source) && <blockquote className="source-quote"><button onClick={() => props.onSource(message.source!)}>Selected passage ↗</button>{message.source.quote && <p>{message.source.quote}</p>}</blockquote>}
         <p className="original-question">{message.sections.map((section) => section.body).join("\n\n")}</p>
       </div> : <div className="assistant-message" key={message.id}>
         <div data-message-id={message.id} data-exploration-id={item.id}>
           {message.sections.map((section) => <section className={`answer-section ${selection?.messageId === message.id && selection.sectionId === section.id ? "selected" : ""}`} data-section-id={section.id} key={section.id}>
             {section.title && <h3><span>{section.title}</span><button className="section-ask" aria-label={`Ask about ${section.title}`} data-no-selection onClick={() => props.onSelect({ explorationId: item.id, messageId: message.id, sectionId: section.id })}>↗</button></h3>}
+            {props.annotations?.map((annotation, index) => annotation.source.explorationId === item.id && annotation.source.messageId === message.id && annotation.source.sectionId === section.id ? <span key={annotation.id} className="source-annotation-marker" data-no-selection title={annotation.question}>[{index + 1}]</span> : null)}
             <AnswerBody text={section.body} />
           </section>)}
         </div>

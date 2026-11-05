@@ -1,7 +1,7 @@
 import type { AnswerRequest, AnswerResult } from "./contracts";
 import type { Connection, Conversation, Exploration, Message } from "./model";
 import { validateConversation, validateSourceReference } from "./model";
-import { validateSynthesisSources, validateTopicAnswers } from "./ai";
+import { validateAnnotationAnswers, validateAnnotations, validateSynthesisSources, validateTopicAnswers } from "./ai";
 
 export function createConversation(): Conversation {
   return {
@@ -51,6 +51,8 @@ export function applyAnswer(
     throw new Error("The question must contain 1–16,000 characters.");
   }
   if (request.selection) validateSourceReference(space, request.selection);
+  const annotations = validateAnnotations(request.annotations, space);
+  if (annotations.length && (request.selection || request.mode !== "auto")) throw new Error("Annotation questions require automatic placement without another selected passage.");
   const originId = request.selection?.explorationId ?? request.activeId;
   const origin = space.explorations[originId];
   if (!origin) throw new Error("The answer target no longer exists.");
@@ -72,6 +74,7 @@ export function applyAnswer(
 
   const allowed = new Set([...answer.context.fullIds, ...answer.context.summaryIds]);
   const topics = validateTopicAnswers(answer.topics, originId, allowed);
+  validateAnnotationAnswers(topics, annotations);
   if (topics.length && request.mode !== "auto") throw new Error("Separate topic answers require automatic placement.");
   if (topics.some((topic) => !Object.hasOwn(space.explorations, topic.targetId))) throw new Error("An additional answer target no longer exists.");
   if (topics.length && (answer.sections.length > 2 || JSON.stringify(answer.sections).length > 4000 || JSON.stringify([answer.sections, ...topics.map((topic) => topic.sections)]).length > 40000)) throw new Error("The multi-topic answer is too large or its overview is not brief.");
@@ -80,7 +83,6 @@ export function applyAnswer(
   const decision = initialRoot || topics.length ? "continue" : answer.decision;
   const sourceIds = validateSynthesisSources(answer.sourceIds, decision, allowed);
   if (sourceIds.some((id) => !Object.hasOwn(space.explorations, id)) || topics.some((topic) => topic.sourceIds?.some((id) => !Object.hasOwn(space.explorations, id)))) throw new Error("A synthesis source no longer exists.");
-  const source = request.selection ? structuredClone(request.selection) : null;
   const explorations = { ...space.explorations };
   const connections: Connection[] = [...(space.connections ?? [])];
   const outputs = [
@@ -91,6 +93,8 @@ export function applyAnswer(
   for (const [outputIndex, output] of outputs.entries()) {
     const primary = outputIndex === 0;
     const part = outputIndex - 1;
+    const annotation = !primary ? annotations.find((item) => item.id === topics[part].annotationId) : undefined;
+    const source = annotation ? structuredClone(annotation.source) : request.selection ? structuredClone(request.selection) : null;
     const target = explorations[output.targetId];
     if (output.decision === "branch" && !target.messages.some((message) => message.role === "assistant")) throw new Error("Ask the first question before starting another topic.");
     const destinationId = output.decision === "continue" ? target.id : primary ? `exploration-${request.requestId}` : `topic-${request.requestId}-${part}`;
@@ -98,7 +102,7 @@ export function applyAnswer(
     const question: Message = {
       id: primary ? `question-${request.requestId}` : `topic-question-${request.requestId}-${part}`,
       role: "user", ...(primary ? { requestId: request.requestId } : {}), source,
-      sections: [{ id: primary ? `prompt-${request.requestId}` : `topic-prompt-${request.requestId}-${part}`, title: "", body: request.question }],
+      sections: [{ id: primary ? `prompt-${request.requestId}` : `topic-prompt-${request.requestId}-${part}`, title: "", body: annotation?.question ?? request.question }],
     };
     const response: Message = {
       id: primary ? `answer-${request.requestId}` : `topic-answer-${request.requestId}-${part}`,

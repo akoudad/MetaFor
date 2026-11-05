@@ -9,6 +9,12 @@ export type ConnectionEndpoints = {
   start: { x: number; y: number };
   end: { x: number; y: number };
 };
+export type AnnotationFrame = {
+  view: SpatialPoint;
+  visibleIds: string[];
+  positions: Record<string, SpatialPoint>;
+  paired: boolean;
+};
 
 export const CARD_WIDTH = 600;
 export const CARD_HEIGHT = 520;
@@ -210,6 +216,41 @@ export function focusView(target: SpatialPoint, width: number, height: number): 
     CARD_HEIGHT / (2 * tangent * framing),
   );
   return { x: anchor.x, y: anchor.y, z: anchor.z + distance };
+}
+
+/** A temporary reading arrangement; never write these positions to the graph. */
+export function annotationView(
+  nodes: SpatialNode[],
+  sourceId: string,
+  replyId: string,
+  width: number,
+  height: number,
+): AnnotationFrame | null {
+  const source = nodes.find((node) => node.id === sourceId);
+  const reply = nodes.find((node) => node.id === replyId);
+  if (!source || !reply) return null;
+  const fallback = (): AnnotationFrame => ({
+    view: focusView(reply.position, width, height), visibleIds: [replyId], positions: {}, paired: false,
+  });
+  if (sourceId === replyId || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return fallback();
+
+  const anchor = point(source.position);
+  const separation = CARD_WIDTH + 60;
+  // At the coordinate limit, use the other side instead of overlapping cards.
+  const offset = anchor.x - separation >= -1e6 ? -separation : separation;
+  const destination = { x: anchor.x + offset, y: anchor.y, z: anchor.z };
+  const margin = 0.94;
+  const distance = Math.max(
+    MIN_DISTANCE,
+    (CARD_WIDTH + separation) / (2 * tangent * aspect(width, height) * margin),
+    CARD_HEIGHT / (2 * tangent * margin),
+  );
+  const scale = height / (2 * tangent * distance);
+  if (scale < 0.8) return fallback();
+  return {
+    view: { x: anchor.x + offset / 2, y: anchor.y, z: anchor.z + distance },
+    visibleIds: [sourceId, replyId], positions: { [replyId]: destination }, paired: true,
+  };
 }
 
 /** Positive delta moves away. Keep the anchor's screen position unchanged. */

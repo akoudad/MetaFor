@@ -1,11 +1,13 @@
 # Hackathon build
 
-Local release candidate · 2026-11-04
+Local release candidate · 2026-11-05
 
 ## Implemented and checked
 
 - [x] Real Meta answers with readable sections.
 - [x] Select text in any completed answer; use the nearby Ask about this action to reply.
+- [x] Queue up to six passage questions and receive separate source-linked replies.
+- [x] Read a focused reply beside its source on wide screens, with a source link on smaller screens.
 - [x] Automatic topic placement with no branch/continue controls in the interface.
 - [x] Separate answer-writing and organizing calls; the organizer keeps, splits, reuses, or combines topics.
 - [x] Several topics can arrive together; synthesis connects its source topics without deleting them.
@@ -25,7 +27,7 @@ Local release candidate · 2026-11-04
 
 ## Verification
 
-- 157 automated tests pass, including 50 integrated conversation UI tests,
+- 183 automated tests pass, including 57 integrated conversation UI tests,
   organizer validation, atomic batches, synthesis, and scene DOM checks.
 - Type checking and the production build pass.
 - Four real app requests (eight `muse-spark-1.3` calls) kept a short city list
@@ -33,8 +35,14 @@ Local release candidate · 2026-11-04
   city topics, and produced an itinerary with four incoming synthesis links.
   Replay and `.ingx` round trips passed. This verifies organization, not the
   factual accuracy of the generated travel information.
-- Earlier single-call verification covered selected-text follow-ups and exact
-  quote preservation; the current two-call path also has automated coverage.
+- The annotation regression passed three real app requests / six model calls:
+  a Wydad-only selected follow-up, two independent annotated club questions, and
+  seven country profiles. Exact sources, individual questions, replay and file
+  round trips passed. No domain-specific splitting logic was introduced.
+- A further live Safari submission queued two selected paragraphs and received
+  replies in their two existing dedicated topics (two more model calls).
+  Opening a reply kept its source visible beside it; refreshing restored the
+  paired view and both readers' positions.
 - The live conversation passed `.ingx` serialization/import. An example is in
   `examples/browser-cache.ingx`.
 - A 35-topic fixture with a 16,440-character answer passed keyboard navigation,

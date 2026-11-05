@@ -1,5 +1,7 @@
 import type { Conversation, SourceReference } from "./model";
 import { CONVERSATION_LIMITS, validateConversation, validateSourceReference } from "./model";
+import type { AnnotationRequest } from "./contracts";
+import { selectedText } from "./ai";
 
 type Point = { x: number; y: number; z: number };
 
@@ -9,6 +11,7 @@ export type PendingQuestion = {
   question: string;
   selection: SourceReference | null;
   includeIds: string[];
+  annotations?: AnnotationRequest[];
 };
 
 export type Snapshot = {
@@ -21,10 +24,11 @@ export type Snapshot = {
     view: Point;
     overview: boolean;
     started: boolean;
-    places: Record<string, { view: Point; draft: string; selection: SourceReference | null; scrollTop: number }>;
+    places: Record<string, { view: Point; draft: string; selection: SourceReference | null; scrollTop: number; annotations?: AnnotationRequest[] }>;
     history: string[];
     positions?: Record<string, Point>;
     pending?: PendingQuestion;
+    annotationPair?: { sourceId: string; replyId: string };
   };
 };
 
@@ -67,6 +71,25 @@ function point(value: unknown, label: string) {
   }
 }
 
+function annotations(value: unknown, conversation: Conversation, allowBlank: boolean): asserts value is AnnotationRequest[] {
+  if (!Array.isArray(value) || value.length > 6) throw new Error("Annotations must contain at most six items.");
+  const ids = new Set<string>();
+  let questions = 0;
+  let passages = 0;
+  for (const item of value) {
+    const annotation = record(item, "Annotation", ["id", "source", "question"]);
+    if (typeof annotation.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,99}$/.test(annotation.id) || unsafeKeys.has(annotation.id)) throw new Error("An annotation has an invalid ID.");
+    if (ids.has(annotation.id)) throw new Error("Annotations must have unique IDs.");
+    ids.add(annotation.id);
+    if (typeof annotation.question !== "string" || annotation.question.length > 8000 || (!allowBlank && !annotation.question.trim())) throw new Error(allowBlank ? "An annotation draft must contain at most 8,000 characters." : "An unfinished annotation question must contain 1–8,000 characters.");
+    validateSourceReference(conversation, annotation.source);
+    questions += annotation.question.length;
+    passages += selectedText(conversation, annotation.source).length;
+  }
+  if (!allowBlank && questions > 24_000) throw new Error("Annotation questions must contain at most 24,000 characters in total.");
+  if (!allowBlank && passages > 24_000) throw new Error("Annotated passages must contain at most 24,000 characters in total.");
+}
+
 function validateSnapshot(value: unknown): asserts value is Snapshot {
   const snapshot = record(value, "File", ["format", "version", "savedAt", "conversation", "view"]);
   if (snapshot.format !== "ingx") throw new Error("This is not an .ingx conversation file.");
@@ -74,12 +97,18 @@ function validateSnapshot(value: unknown): asserts value is Snapshot {
   validDate(snapshot.savedAt);
   validateConversation(snapshot.conversation);
   const conversation = snapshot.conversation;
-  const view = record(snapshot.view, "Saved view", ["activeId", "view", "overview", "started", "places", "history", "positions", "pending"]);
+  const view = record(snapshot.view, "Saved view", ["activeId", "view", "overview", "started", "places", "history", "positions", "pending", "annotationPair"]);
   const known = (id: unknown, label: string): id is string => {
     if (typeof id !== "string" || !Object.hasOwn(conversation.explorations, id)) throw new Error(`${label} refers to a missing exploration.`);
     return true;
   };
   known(view.activeId, "Active topic");
+  if (view.annotationPair !== undefined) {
+    const pair = record(view.annotationPair, "Annotation view", ["sourceId", "replyId"]);
+    if (known(pair.sourceId, "Annotation source") && known(pair.replyId, "Annotation reply")) {
+      if (pair.replyId !== view.activeId || conversation.explorations[pair.replyId].source?.explorationId !== pair.sourceId) throw new Error("The annotation view must pair the active reply with its original source.");
+    }
+  }
   point(view.view, "Camera");
   if (typeof view.overview !== "boolean" || typeof view.started !== "boolean") throw new Error("View flags must be true or false.");
   if (!Array.isArray(view.history) || view.history.length > 1000) throw new Error("Navigation history must contain at most 1000 entries.");
@@ -87,7 +116,7 @@ function validateSnapshot(value: unknown): asserts value is Snapshot {
   const places = record(view.places, "Saved places");
   for (const [id, value] of Object.entries(places)) {
     known(id, "Saved place");
-    const place = record(value, "Saved place", ["view", "draft", "selection", "scrollTop"]);
+    const place = record(value, "Saved place", ["view", "draft", "selection", "scrollTop", "annotations"]);
     point(place.view, "Saved camera");
     if (typeof place.draft !== "string" || place.draft.length > 16_000) throw new Error("A saved draft must contain at most 16,000 characters.");
     if (typeof place.scrollTop !== "number" || !Number.isFinite(place.scrollTop) || place.scrollTop < 0 || place.scrollTop > CONVERSATION_LIMITS.coordinate) {
@@ -95,7 +124,9 @@ function validateSnapshot(value: unknown): asserts value is Snapshot {
     }
     if (place.selection !== null) {
       validateSourceReference(conversation, place.selection);
-      if (place.selection.explorationId !== id) throw new Error("A saved selection belongs to a different topic.");
+    }
+    if (place.annotations !== undefined) {
+      annotations(place.annotations, conversation, true);
     }
   }
   if (view.positions !== undefined) {
@@ -105,13 +136,17 @@ function validateSnapshot(value: unknown): asserts value is Snapshot {
     }
   }
   if (view.pending !== undefined) {
-    const pending = record(view.pending, "Unfinished question", ["requestId", "activeId", "question", "selection", "includeIds"]);
+    const pending = record(view.pending, "Unfinished question", ["requestId", "activeId", "question", "selection", "includeIds", "annotations"]);
     if (typeof pending.requestId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,99}$/.test(pending.requestId) || unsafeKeys.has(pending.requestId)) throw new Error("The unfinished question has an invalid request ID.");
     known(pending.activeId, "Unfinished question");
     if (typeof pending.question !== "string" || !pending.question.trim() || pending.question.length > 8000) throw new Error("An unfinished question must contain 1–8,000 characters.");
     if (pending.selection !== null) {
       validateSourceReference(conversation, pending.selection);
       if (pending.selection.explorationId !== pending.activeId) throw new Error("The unfinished question's selection belongs to a different topic.");
+    }
+    if (pending.annotations !== undefined) {
+      annotations(pending.annotations, conversation, false);
+      if (pending.selection !== null && pending.annotations.length) throw new Error("Use annotations or a single unfinished selection, not both.");
     }
     if (!Array.isArray(pending.includeIds) || pending.includeIds.length > 8) throw new Error("An unfinished question can include at most eight topics.");
     for (const id of pending.includeIds) known(id, "Unfinished question context");

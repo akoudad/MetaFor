@@ -2,6 +2,12 @@ import type { Conversation, SourceReference } from "./model";
 
 export type RoutingMode = "auto" | "branch" | "continue";
 
+export type AnnotationRequest = {
+  id: string;
+  source: SourceReference;
+  question: string;
+};
+
 export type AnswerRequest = {
   requestId: string;
   conversation: Conversation;
@@ -10,6 +16,7 @@ export type AnswerRequest = {
   selection: SourceReference | null;
   mode: RoutingMode;
   includeIds: string[];
+  annotations?: AnnotationRequest[];
 };
 
 export type ContextRecord = {
@@ -19,6 +26,7 @@ export type ContextRecord = {
 };
 
 export type TopicAnswer = {
+  annotationId?: string;
   targetId: string;
   decision: "branch" | "continue";
   title: string;

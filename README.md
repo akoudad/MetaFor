@@ -4,7 +4,9 @@ Explore an AI conversation by topic without losing your place.
 
 Select a passage and click **Ask about this**. Read its explanation, explore
 connected topics, and return to the original answer. Reading positions, drafts,
-and exact passage sources are preserved.
+and exact passage sources are preserved. Add questions to several passages and
+send them together for separate replies. On a wide screen, a focused reply opens
+beside its source.
 
 The model can keep a brief answer together, split substantial independent
 subjects, reuse existing topics, or combine ideas into a new synthesis topic.
@@ -45,7 +47,8 @@ npm start
 ```
 
 Optional live checks make paid calls: `scripts/live-smoke.ts` uses up to six;
-`scripts/live-graph-smoke.ts` uses up to eight. Run them with `npx tsx` against a
+`scripts/live-graph-smoke.ts` uses up to eight;
+`scripts/live-annotation-smoke.ts` uses six. Run them with `npx tsx` against a
 configured local server. See the [demo instructions](docs/demo.md).
 
 Voice, collaboration, and cloud sync are outside this build.

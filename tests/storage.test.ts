@@ -19,9 +19,91 @@ function fixture(): Snapshot {
   };
 }
 
+function annotationFixture(): Snapshot {
+  const snapshot = fixture();
+  const place = snapshot.view.places["job-search"];
+  const source = structuredClone(place.selection!);
+  place.selection = null;
+  place.annotations = [
+    { id: "note-shortlist", source, question: "" },
+    { id: "note-equity", source: { explorationId: "compensation", messageId: "compensation-answer", sectionId: "compensation-equity" }, question: "How should I compare this?" },
+  ];
+  return snapshot;
+}
+
 test(".ingx roundtrip preserves content, draft, selection, camera, and dragged positions", () => {
   const snapshot = fixture();
   assert.deepEqual(parseSnapshot(serializeSnapshot(snapshot)), snapshot);
+});
+
+test(".ingx preserves annotation drafts, exact cross-topic sources, and blank unfinished edits", () => {
+  const snapshot = annotationFixture();
+  const restored = parseSnapshot(serializeSnapshot(snapshot));
+  assert.deepEqual(restored, snapshot);
+  assert.equal(restored.view.places["job-search"].annotations![0].question, "");
+  assert.equal(restored.view.places["job-search"].annotations![1].source.explorationId, "compensation");
+  snapshot.view.places["job-search"].selection = snapshot.view.places["job-search"].annotations![1].source;
+  assert.deepEqual(parseSnapshot(serializeSnapshot(snapshot)), snapshot, "the next selected passage may belong to another topic when building a batch");
+  snapshot.view.places["job-search"].annotations = [];
+  assert.deepEqual(parseSnapshot(serializeSnapshot(snapshot)), snapshot, "removing the final queued annotation keeps a selected passage from the paired source card recoverable");
+  const legacy = fixture();
+  assert.equal(parseSnapshot(serializeSnapshot(legacy)).view.places["job-search"].annotations, undefined);
+});
+
+test("paired annotation views preserve their camera and require the active reply's genuine source", () => {
+  const snapshot = fixture();
+  snapshot.view.annotationPair = { sourceId: "job-search", replyId: "compensation" };
+  assert.deepEqual(parseSnapshot(serializeSnapshot(snapshot)), snapshot);
+  for (const pair of [null, {}, { sourceId: "missing", replyId: "compensation" }, { sourceId: "equity", replyId: "compensation" }, { sourceId: "compensation", replyId: "equity" }, { sourceId: "job-search", replyId: "compensation", extra: true }]) {
+    assert.throws(() => parseSnapshot(JSON.stringify({ ...snapshot, view: { ...snapshot.view, annotationPair: pair } })), (error) => error instanceof Error && !(error instanceof TypeError));
+  }
+});
+
+test("annotation imports reject malformed, oversized, duplicate, and forged items without TypeErrors", () => {
+  const snapshot = annotationFixture();
+  const item = snapshot.view.places["job-search"].annotations![0];
+  const invalid: unknown[] = [
+    null, {}, [null], [{}],
+    [{ ...item, id: "__proto__" }],
+    [{ ...item, id: "x".repeat(101) }],
+    [{ ...item, question: 7 }],
+    [{ ...item, question: "q".repeat(8001) }],
+    [{ ...item, apiKey: "never-store-this" }],
+    [{ ...item, source: { ...item.source, quote: "invented passage" } }],
+    [{ ...item, source: { ...item.source, messageId: "missing" } }],
+    [{ ...item, source: { ...item.source, endSectionId: "compensation-equity" } }],
+    [item, item],
+    Array.from({ length: 7 }, (_, index) => ({ ...item, id: `note-${index}` })),
+  ];
+  for (const annotations of invalid) {
+    const view = { ...snapshot.view, places: { ...snapshot.view.places, "job-search": { ...snapshot.view.places["job-search"], annotations } } };
+    assert.throws(() => parseSnapshot(JSON.stringify({ ...snapshot, view })), (error) => error instanceof Error && !(error instanceof TypeError));
+  }
+  snapshot.view.places["job-search"].selection = item.source;
+  assert.deepEqual(parseSnapshot(serializeSnapshot(snapshot)), snapshot, "queued annotations coexist with the next selected draft passage");
+});
+
+test("pending annotation budgets are strict while oversized unfinished edits remain recoverable", () => {
+  const snapshot = annotationFixture();
+  const source = { explorationId: "job-search", messageId: "job-search-answer", sectionId: "companies", quote: "x".repeat(8000) };
+  snapshot.conversation.explorations["job-search"].messages.find((message) => message.id === source.messageId)!.sections.find((section) => section.id === source.sectionId)!.body = "x".repeat(12000);
+  const place = snapshot.view.places["job-search"];
+  place.annotations = Array.from({ length: 3 }, (_, index) => ({ id: `note-${index}`, source, question: "q".repeat(8000) }));
+  snapshot.view.pending = { requestId: "bounded-annotations", activeId: "job-search", question: "Answer these annotations", selection: null, includeIds: [], annotations: structuredClone(place.annotations) };
+  assert.doesNotThrow(() => serializeSnapshot(snapshot), "24,000 characters in each aggregate are allowed");
+  place.annotations.push({ id: "note-3", source: { ...source, quote: "x" }, question: "q" });
+  assert.doesNotThrow(() => serializeSnapshot(snapshot), "draft edits may exceed submission budgets without losing save capability");
+  snapshot.view.pending.annotations = structuredClone(place.annotations);
+  assert.throws(() => serializeSnapshot(snapshot), /Annotation questions.*24,000/);
+  place.annotations[3].question = "";
+  snapshot.view.pending.annotations = [...structuredClone(place.annotations.slice(0, 3)), { ...place.annotations[3], question: "q" }];
+  snapshot.view.pending.annotations[0].question = "q";
+  assert.throws(() => serializeSnapshot(snapshot), /Annotated passages.*24,000/);
+  place.annotations = [0, 1].map((index) => ({ id: `whole-section-${index}`, source: { explorationId: source.explorationId, messageId: source.messageId, sectionId: source.sectionId }, question: "" }));
+  snapshot.view.pending.annotations = place.annotations.map((item) => ({ ...item, question: "Explain this" }));
+  assert.throws(() => serializeSnapshot(snapshot), /Annotated passages.*24,000/, "whole-section references count their resolved titles and bodies too");
+  delete snapshot.view.pending;
+  assert.doesNotThrow(() => serializeSnapshot(snapshot), "large selected sections can still be saved while the user narrows their annotations");
 });
 
 test("malformed imports reject unknown structures without leaking TypeErrors", () => {
@@ -64,6 +146,26 @@ class MemoryStorage implements Storage {
   removeItem(key: string) { this.data.delete(key); }
   setItem(key: string, value: string) { this.data.set(key, value); }
 }
+
+test("annotation drafts reload from IndexedDB and localStorage without changing captured text", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const indexed = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  try {
+    for (const database of [new IDBFactory(), undefined]) {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: new MemoryStorage() });
+      Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: database });
+      const snapshot = annotationFixture();
+      await saveSnapshot(snapshot);
+      const restored = (await loadSnapshot(snapshot.conversation.id))!;
+      assert.deepEqual(restored, snapshot);
+      snapshot.view.places["job-search"].annotations![0].question = "Edited after saving";
+      assert.equal((await loadSnapshot(snapshot.conversation.id))!.view.places["job-search"].annotations![0].question, "", "saved annotation drafts are snapshots rather than live references");
+    }
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
+    if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");
+  }
+});
 
 test("localStorage fallback retains separate spaces and loads the most recent", async () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -198,6 +300,24 @@ test(".ingx preserves an unfinished question separately from the next draft", ()
   const restored = parseSnapshot(serializeSnapshot(snapshot));
   assert.deepEqual(restored.view.pending, snapshot.view.pending);
   assert.equal(restored.view.places["job-search"].draft, "My next question is different");
+});
+
+test("unfinished annotation questions stay separate from the next editable annotation drafts", () => {
+  const snapshot = annotationFixture();
+  const submitted = structuredClone(snapshot.view.places["job-search"].annotations!);
+  submitted[0].question = "Explain this shortlist";
+  snapshot.view.pending = { requestId: "annotation-pending", activeId: "job-search", question: "Answer both annotations", selection: null, includeIds: [], annotations: submitted };
+  snapshot.view.places["job-search"].annotations![1].question = "A different question for later";
+  const restored = parseSnapshot(serializeSnapshot(snapshot));
+  assert.deepEqual(restored.view.pending?.annotations, submitted);
+  assert.equal(restored.view.places["job-search"].annotations![0].question, "");
+  assert.equal(restored.view.places["job-search"].annotations![1].question, "A different question for later");
+  const invalid = structuredClone(snapshot);
+  invalid.view.pending!.annotations![0].question = " ";
+  assert.throws(() => serializeSnapshot(invalid), /unfinished annotation question must contain 1/);
+  invalid.view.pending!.annotations![0].question = submitted[0].question;
+  invalid.view.pending!.selection = submitted[0].source;
+  assert.throws(() => serializeSnapshot(invalid), /annotations or a single unfinished selection/);
 });
 
 test("unfinished-question imports reject malformed references, completed requests, and extra secrets", () => {

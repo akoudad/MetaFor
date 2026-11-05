@@ -121,3 +121,12 @@ Physical trackpad/touch gestures, device performance, live arrival motion, and
 public deployment remain unverified.
 
 See the [acceptance checklist](hackathon.md) and [demo](demo.md).
+
+## Passage annotations
+
+Select text, choose **Ask about this**, and write a question. Selecting a second
+passage queues the first question; **Add another annotation** provides an explicit
+alternative. Edit or remove queued questions, then send up to six together. Each
+question retains its own source and receives a separate answer destination.
+On wide screens, a chosen source-linked reply sits beside its source. Smaller
+screens focus the reply with a source return link. Existing answers remain intact.

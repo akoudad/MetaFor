@@ -32,15 +32,19 @@ placement rather than promising a particular graph.
 3. **Follow a passage.** Highlight an interesting detail and click **Ask about
    this**. Ask a focused follow-up. Show its exact source, whether the answer
    continues an existing topic or opens a deeper one. Return to the saved place.
-4. **Combine ideas.** Ask for one practical itinerary comparing the cities and
+4. **Annotate two subjects.** Select a passage, click **Ask about this**, and
+   type a question. Select another passage and write its question. The first is
+   queued automatically; **Add another annotation** also queues it explicitly.
+   Send together, choose a reply, and show its source beside it on a wide screen.
+5. **Combine ideas.** Ask for one practical itinerary comparing the cities and
    their trade-offs. If a synthesis topic is created, show its directed input
    arrows and the original topics that remain available. This is a new answer,
    not a destructive merge of the old discussions.
-5. **Navigate and resume.** Read with the wheel. After reaching an edge, pause
+6. **Navigate and resume.** Read with the wheel. After reaching an edge, pause
    and continue to explore or return. Use **Explore topics** and the mini-map as
    alternatives. Drag a topic, reset the layout, then reopen the conversation
    through **Saved chats**. Export an `.ingx` copy.
-6. **Explain the implementation.** “The writer creates content. The organizer
+7. **Explain the implementation.** “The writer creates content. The organizer
    assigns its sections to the conversation. The app checks every section is
    used exactly once, validates references, and applies the result together.”
 
@@ -81,3 +85,13 @@ npx tsx scripts/live-graph-smoke.ts http://127.0.0.1:3000 /path/to/artifacts
 Retries can incur additional paid calls. Neither script tests actual browser
 paint, physical gestures, or device performance. See [release checks](hackathon.md)
 for the current verification record.
+
+```sh
+npx tsx scripts/live-annotation-smoke.ts
+```
+
+This makes **three app requests / six paid calls**. It reproduces a selected
+club follow-up, two independently annotated club questions, and substantial
+country-by-country details. It checks focused destinations, exact sources,
+separate questions, replay, and file round trips. Historical fixture text is
+input data for organization tests, not verified current sports or political facts.

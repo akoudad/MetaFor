@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnswerRequest } from "../src/lib/contracts";
-import { AnswerError, MAX_CONTEXT_CHARS, MAX_REQUEST_BYTES, buildAnswerContext, validateAnswerOutput, validateAnswerRequest } from "../src/lib/ai";
+import { AnswerError, MAX_CONTEXT_CHARS, MAX_REQUEST_BYTES, answerMessages, buildAnswerContext, validateAnswerOutput, validateAnswerRequest } from "../src/lib/ai";
 import { createAnswerHandler, generateAnswer, getProviderStatus } from "../src/lib/provider";
 import { createSampleConversation } from "../src/lib/sample";
 import { createConversation } from "../src/lib/session";
@@ -448,4 +448,110 @@ test("user cancellation aborts an organizer already running after the writer", a
   controller.abort();
   await assert.rejects(pending, (error: unknown) => error instanceof AnswerError && error.code === "cancelled");
   assert.equal(organizerAborted, true);
+});
+
+function annotatedInput(): AnswerRequest {
+  const request = input();
+  request.activeId = "job-search";
+  request.question = "Answer each annotated question separately.";
+  request.annotations = [
+    { id: "companies-note", source: { explorationId: "job-search", messageId: "job-search-answer", sectionId: "companies", quote: "Compensation is one part of that comparison." }, question: "How should I compare these?" },
+    { id: "equity-note", source: { explorationId: "compensation", messageId: "compensation-answer", sectionId: "compensation-equity" }, question: "What can change this value?" },
+  ];
+  return request;
+}
+
+function annotatedOutput(request: AnswerRequest) {
+  return { ...answer(), topics: request.annotations!.map((annotation) => ({ annotationId: annotation.id, targetId: annotation.source.explorationId, decision: "branch", title: annotation.id, summary: "A focused answer.", sections: [{ title: "Answer", body: `Reply to: ${annotation.question}` }], sourceIds: [] })) };
+}
+
+test("annotation requests preserve each exact question and prioritize sources from different topics", () => {
+  const request = annotatedInput();
+  const validated = validateAnswerRequest(request);
+  assert.deepEqual(validated.annotations, request.annotations);
+  assert.notEqual(validated.annotations![0].source, request.annotations![0].source);
+  const context = buildAnswerContext(validated);
+  assert.deepEqual(context.payload.annotations.map((item) => item.id), ["companies-note", "equity-note"]);
+  assert.equal(context.payload.annotations[0].text, request.annotations![0].source.quote);
+  assert.match(context.payload.annotations[1].text, /equity/i);
+  assert.ok(context.record.fullIds.includes("job-search"));
+  assert.ok(context.record.fullIds.includes("compensation"));
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+  const result = validateAnswerOutput(annotatedOutput(request), request, context.record, "test");
+  assert.deepEqual(result.topics!.map((topic) => topic.annotationId), request.annotations!.map((item) => item.id));
+});
+
+test("malformed, ambiguous, oversized and stale annotations are rejected before model calls", () => {
+  const request = annotatedInput();
+  for (const annotations of [
+    null,
+    [null],
+    [request.annotations![0], request.annotations![0]],
+    Array.from({ length: 7 }, (_, index) => ({ ...request.annotations![0], id: `note-${index}` })),
+    [{ ...request.annotations![0], question: " " }],
+    [{ ...request.annotations![0], question: "x".repeat(8001) }],
+    [{ ...request.annotations![0], source: { ...request.annotations![0].source, quote: "made up" } }],
+    [{ ...request.annotations![0], source: { ...request.annotations![0].source, explorationId: "missing" } }],
+    [{ ...request.annotations![0], secret: "must-not-persist" }],
+    Array.from({ length: 4 }, (_, index) => ({ ...request.annotations![0], id: `note-${index}`, question: "x".repeat(7000) })),
+  ]) assert.throws(() => validateAnswerRequest({ ...request, annotations }), (error) => error instanceof AnswerError);
+  assert.throws(() => validateAnswerRequest({ ...request, selection: request.annotations![0].source }), /invalid structure/);
+  assert.throws(() => validateAnswerRequest({ ...request, mode: "continue" }), /invalid structure/);
+});
+
+test("every annotation must map once to its own source, with no missing or crossed targets", () => {
+  const request = annotatedInput();
+  const context = buildAnswerContext(request).record;
+  const output = annotatedOutput(request);
+  for (const topics of [
+    [],
+    output.topics.slice(0, 1),
+    [output.topics[0], { ...output.topics[1], annotationId: output.topics[0].annotationId }],
+    [output.topics[0], { ...output.topics[1], annotationId: "invented" }],
+    [output.topics[0], { ...output.topics[1], annotationId: undefined }],
+    [output.topics[0], { ...output.topics[1], targetId: "job-search" }],
+    [output.topics[0], { ...output.topics[1], decision: "continue" }],
+  ]) assert.throws(() => validateAnswerOutput({ ...output, topics }, request, context, "test"), /annotation/);
+  assert.throws(() => validateAnswerOutput(output, { ...request, annotations: undefined }, context, "test"), /annotation/);
+});
+
+test("a selected club status follow-up carries the selected subject before broad historical context", () => {
+  const conversation = createConversation();
+  conversation.explorations.root.title = "Football clubs";
+  conversation.explorations.root.messages = [
+    { id: "clubs-question", role: "user", sections: [{ id: "clubs-prompt", title: "", body: "Tell me about football clubs." }] },
+    { id: "clubs-answer", role: "assistant", sections: [{ id: "clubs-list", title: "Clubs", body: "Wydad and Raja are two subjects from this sample list." }] },
+  ];
+  const request: AnswerRequest = { ...input(), conversation, activeId: "root", question: "wat their current status", selection: { explorationId: "root", messageId: "clubs-answer", sectionId: "clubs-list", quote: "Wydad" } };
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  const messages = answerMessages(request, context);
+  const data = JSON.parse(messages[1].content);
+  assert.equal(data.context.selection.text, "Wydad");
+  assert.equal(data.question, request.question);
+  assert.match(messages[0].content, /selected passage overrides the broader historical question/);
+  assert.match(messages[0].content, /no browsing tool/);
+  assert.match(messages[0].content, /one independently explorable subject per section/);
+});
+
+test("two-call annotation generation carries immutable ownership through both structured schemas", async () => {
+  const request = validateAnswerRequest(annotatedInput());
+  const written = annotatedOutput(request);
+  const calls: string[] = [];
+  const result = await generateAnswer(request, { env: testEnv, fetch: async (_url, init) => {
+    const payload = JSON.parse(String(init?.body));
+    const name = payload.response_format.json_schema.name;
+    calls.push(name);
+    const data = JSON.parse(payload.messages[1].content);
+    if (name === "metaphore_answer") {
+      assert.deepEqual(data.context.annotations.map((item: { id: string }) => item.id), ["companies-note", "equity-note"]);
+      assert.ok(payload.response_format.json_schema.schema.properties.topics.items.required.includes("annotationId"));
+      return completion(written);
+    }
+    assert.deepEqual(data.sections.map((section: { annotationId: string | null }) => section.annotationId), [null, "companies-note", "equity-note"]);
+    assert.equal(data.annotations[0].text, request.annotations![0].source.quote);
+    return completion({ reason: "Each question keeps its selected passage.", overview: "", primary: { decision: "continue", title: written.title, summary: written.summary, sectionIds: ["s0"], sourceIds: [] }, topics: written.topics.map(({ sections: _sections, ...topic }, index) => ({ ...topic, sectionIds: [`s${index + 1}`] })) });
+  } });
+  assert.deepEqual(calls, ["metaphore_answer", "metaphore_organization"]);
+  assert.deepEqual(result.topics!.map((topic) => topic.annotationId), ["companies-note", "equity-note"]);
+  assert.deepEqual(result.topics!.flatMap((topic) => topic.sections), written.topics.flatMap((topic) => topic.sections));
 });

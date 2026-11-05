@@ -48,3 +48,20 @@ sources and navigation, restored reading position, section Ask controls, and
 topic choices. Physical trackpad and touch gestures, device performance, and
 live arrival motion remain unverified; automated geometry and DOM checks do not
 establish those.
+
+## Annotation revision · 2026-11-05
+
+The reported broad-topic failures were reproduced as selection and partitioning
+cases. Writer instructions now resolve pronouns against the actual passage and
+keep independent detailed subjects in separate sections; the organizer receives
+resolved passages rather than IDs alone. Annotation batches carry immutable IDs
+through both calls, with complete section ownership and atomic application.
+
+Review caught and fixed draft/pending budget mismatches, cross-topic selection
+persistence, source-reader focus stealing, paired-view reload/zoom issues, and
+reused topics opening at old answers. Tests cover these boundaries. Real model
+checks exercised selected-club scope, two annotations, and separate country
+profiles; native Safari exercised exact paragraph selection, queueing, and a live
+batch that reused existing topics. The source/reply view and both reading
+positions survived a refresh. Grouping remains a model judgment. This build
+does not repartition previously saved answers automatically.

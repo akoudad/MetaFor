@@ -24,6 +24,7 @@ type SpatialWorldProps = {
   links: SpatialLink[];
   activeId?: string;
   visibleIds?: string[];
+  fullDetailIds?: string[];
   view: WorldPoint;
   reducedMotion: boolean;
   transition?: SpatialTransition | null;
@@ -295,8 +296,9 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       frame = null;
       if (disposed || document.visibilityState === "hidden") return;
 
-      const { nodes, links, view, reducedMotion, activeId, visibleIds, transition } = latest.current;
+      const { nodes, links, view, reducedMotion, activeId, visibleIds, fullDetailIds, transition } = latest.current;
       const visibleNodeIds = visibleIds ? new Set(visibleIds) : null;
+      const fullDetailNodeIds = new Set(fullDetailIds ?? []);
       const requested = finitePoint(view, DEFAULT_VIEW);
       const delta = previousTime ? Math.min((time - previousTime) / 1000, 0.05) : 1 / 60;
       previousTime = time;
@@ -420,7 +422,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         element.style.zIndex = String(node.id === activeId ? camera.far + 1 : Math.max(1, Math.round(camera.far - distance)));
         element.style.setProperty("--node-scale", String(Math.max(0.1, scale)));
         const mobileFullThreshold = Math.max(0.1, (width - 32) / CARD_WIDTH * 0.9);
-        const detail = scale >= mobileFullThreshold ? "full" : detailForScale(scale);
+        const detail = fullDetailNodeIds.has(node.id) || scale >= mobileFullThreshold ? "full" : detailForScale(scale);
         element.dataset.detail = detail;
         // Keep projectable endpoints so links can cross the clipped viewport
         // even when an endpoint's card is completely offscreen.

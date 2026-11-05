@@ -1,6 +1,6 @@
 # Architecture
 
-Current implementation · 2026-11-04
+Current implementation · 2026-11-05
 
 One Next.js app uses React and TypeScript for the interface and a server route
 for the Meta Model API. A Three.js `PerspectiveCamera` projects HTML topics and
@@ -14,7 +14,11 @@ still. Hidden tabs pause animation, and reduced motion disables ambient movement
 
 Topics remain mounted while the camera moves. Projected scale selects titles,
 summaries, or full answers. The app owns layout, draggable positions, source
-arrows, the navigation rail, and section outlines.
+arrows, the navigation rail, and section outlines. A focused source/reply pair uses temporary presentation
+coordinates on wide screens: the source stays in place and the reply appears to
+its left. Small screens focus the reply with its source reference. This does not
+alter saved manual positions. Explicit full-detail IDs keep both readers open;
+the current pair and camera survive reload.
 
 A new-topic event triggers a 1.2-second source-to-detail transition: pull back,
 reveal the child and connection, then enter the answer. It does not replay when
@@ -80,7 +84,7 @@ The current model is nested JSON, not a separate database table for every record
 | Section | Stable ID, heading, original Markdown body. |
 | Source reference | Exploration, message, starting section, optional ending section and selected quote. |
 | Connection | Source and destination IDs, reason, type (`related` or `synthesis`), suggested/accepted status. Synthesis edges are directed and accepted. |
-| View | Active topic, camera, overview, history, dragged positions, per-topic draft, selection, scroll position, and optional unfinished question. |
+| View | Active topic, camera, overview, history, dragged positions, per-topic draft, selection, annotation queue, scroll position, optional source/reply view, and unfinished question. |
 
 Navigation parents form a tree; the separate connection graph may contain cycles.
 Source selections must match rendered text within one assistant message, including
@@ -88,18 +92,23 @@ selections across its sections. App-assigned IDs preserve existing answer text.
 
 Text selection first creates a temporary, range-positioned action. Choosing
 **Ask about this** commits its validated source reference and focuses the composer.
-The preview is not saved or sent. Selection-handle changes are debounced; scroll,
+Writing a question and selecting another passage queues the first annotation.
+The explicit **Add another annotation** action does the same. Queued questions
+can be edited or removed before sending, and unfinished queues are saved. One
+selected question still supports the legacy selection request; a queued batch
+sends separate annotation IDs, sources and questions. The preview is not saved or sent. Selection-handle changes are debounced; scroll,
 resize, navigation, or dismissal removes the action to avoid a stale screen anchor.
 
 ## Answer flow
 
-1. Capture the question, target, selection, placement mode, and explicitly included
+1. Capture the question, target, selection or annotation batch, placement mode, and explicitly included
    topics under a request ID. Clear the input immediately and show the submitted
    question in its topic's pending card. A newly typed draft stays separate.
    Navigation does not change the captured target.
 2. Build bounded context from the selection, original question, genuine source
    anchors, recent excerpts, and summaries. Reserve up to 20,000 characters for
-   at most 12 source anchors. Prioritize the active topic, explicitly included
+   at most 12 source anchors. Annotation source paths precede an unrelated active
+   path. Then prioritize the active topic, explicitly included
    topics, ancestors, then up to eight direct children. Unrelated siblings do not
    automatically receive full excerpts. Topics and summaries carry `parentId`.
    The total JSON budget is 60,000 characters, not a token-count guarantee.
@@ -111,6 +120,9 @@ resize, navigation, or dismissal removes the action to avoid a stale screen anch
    directory, and exact writer sections. It assigns each section ID exactly once,
    in original order within its group. It may write titles, summaries, a short
    placement reason, and an overview; it cannot rewrite substantive section text.
+   Both calls receive resolved selected text and each annotation's own question.
+   Selection defines pronoun scope; wider history only helps interpret it. Detailed
+   independent subjects need separate writer sections for the organizer to assign.
    Validate complete coverage, unique assignments, supplied targets, and bounds.
 5. Apply the complete result atomically. There can be at most eight additional
    topic outputs and 40,000 serialized section characters across the answer.
@@ -122,6 +134,14 @@ resize, navigation, or dismissal removes the action to avoid a stale screen anch
    `sourceIds`. Add accepted, directed input-to-synthesis edges and retain every
    original topic. Synthesis edges do not change navigation ancestry. Continuing
    an existing topic refreshes its summary and retains its established title.
+
+A batch accepts up to six annotations, with up to 8,000 characters per question,
+24,000 question characters in total, and 24,000 resolved passage characters.
+Every annotation requires exactly one topic output bearing the same ID. The
+organizer cannot move its writer sections to another annotation or the overview.
+A new annotated reply branches from its actual source; an existing dedicated
+subject topic may be reused. Each reply stores its individual question and exact
+source. Invalid or incomplete batches are rejected without partial changes.
 
 The interface requests automatic placement. Explicit API modes remain supported
 for compatibility and reject additional outputs. Organizer decisions are model
@@ -157,12 +177,12 @@ IDs, references, quotes, and parent cycles. Imported spaces receive a new
 conversation ID, preserving the existing library. Credentials are not exported.
 
 Optional `view.pending` records the request ID, target topic, question, selected
-passage, and included topic IDs. It does not duplicate the conversation or store
+passage or annotation batch, and included topic IDs. It does not duplicate the conversation or store
 credentials. Reloading or importing restores it as paused; sending requires an
 explicit retry. Stop preserves it, while Dismiss removes it without changing the
 next draft. A completed request ID cannot also appear as pending. Files without
 this optional field still load. Older strict readers may reject the pending
-field or the new synthesis connection type.
+fields, annotation queues, paired views, or the synthesis connection type.
 
 IndexedDB stores snapshots by conversation ID. A synchronous localStorage backup
 protects recent state when the page is hidden or closed and provides a fallback
@@ -178,7 +198,13 @@ state. The latest localhost graph check passed four app requests / eight model
 calls: an inline shortlist, four separate city topics, three continuations in
 relevant existing city topics, and a new seven-day itinerary with four incoming
 synthesis edges. Replay and `.ingx` round trips passed. These are observed outcomes,
-not guaranteed routing rules.
+not guaranteed routing rules. The annotation regression added three app requests /
+six model calls: a Wydad-only selected follow-up, two separately annotated club
+questions, and seven country profiles. A further live Safari annotation batch
+reused the two existing dedicated club topics. New replies in reused topics are
+revealed once when chosen; later visits retain the user's reading position.
+Safari also verified the source/reply view and both readers' positions after
+refreshing the final production build at port 3002.
 
 Native Safari checks on the local production build at port 3001 verified import
 of that graph, the compact four-city layout and synthesis, source-link navigation,

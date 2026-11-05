@@ -265,3 +265,25 @@ input, select { font: inherit; color: inherit; }
   .space-map-heading { font-size: 9px; }
   .space-map-legend { font-size: 8px; }
 }
+
+.annotation-queue { margin: 0 0 12px 53px; padding: 12px 14px; border: 1px solid #303030; background: rgba(7,7,7,.96); }
+.annotation-queue-heading { display: flex; justify-content: space-between; gap: 12px; color: #b6b6b6; font-size: 11px; margin-bottom: 8px; }
+.annotation-queue-heading > span:last-child { color: #777; }
+.annotation-queue-list { max-height: 152px; overflow-y: auto; overscroll-behavior: contain; }
+.annotation-draft { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
+.annotation-draft + .annotation-draft { border-top: 1px solid #252525; }
+.annotation-draft > div { flex: 1; min-width: 0; }
+.annotation-draft p { margin: 0 0 5px; color: #888; font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.annotation-draft textarea { width: 100%; border: 0; outline: none; resize: vertical; max-height: 80px; min-height: 24px; background: transparent; color: #eee; font: inherit; font-size: 13px; }
+.annotation-number, .source-annotation-marker { color: #bbb; font: 11px var(--font-mono), monospace; }
+.source-annotation-marker { display: block; margin-bottom: 6px; }
+.send-annotations { display: block; margin: 8px 0 0 auto; font-size: 12px; color: #ddd; }
+.queue-annotation { display: block; margin: 0 0 8px 53px; font-size: 11px; color: #aaa; }
+.has-annotations .world-stage { bottom: 340px; }
+.has-annotations .topic-choice { bottom: 350px; }
+@media (max-width: 700px) {
+  .annotation-queue { margin-left: 0; padding: 9px 12px; }
+  .annotation-queue-heading > span:last-child { display: none; }
+  .annotation-queue-list { max-height: 110px; }
+  .has-annotations .world-stage { bottom: 300px; }
+}

@@ -69,3 +69,59 @@ test("organizer sees stable content references and only supplied existing topic 
   assert.deepEqual(data.existingTopics.map((topic: { id: string }) => topic.id), ["root"]);
   assert.equal(data.sections[2].body, "C text");
 });
+
+test("a selected club follow-up becomes a focused child and retains its exact source", () => {
+  const { request, answer, plan } = fixture();
+  request.conversation.explorations.root.title = "Football clubs";
+  request.conversation.explorations.root.messages = [{ id: "clubs", role: "assistant", sections: [{ id: "club-list", title: "Clubs", body: "Wydad and Raja are sample subjects." }] }];
+  request.question = "wat their current status";
+  request.selection = { explorationId: "root", messageId: "clubs", sectionId: "club-list", quote: "Wydad" };
+  answer.title = "Wydad status";
+  answer.summary = "A focused response about the selected club.";
+  answer.sections = [{ title: "Current status", body: "Current competition details need verification from a current source." }];
+  const result = organizeAnswer({ ...plan, overview: "", primary: { ...plan.primary, decision: "branch", title: answer.title, summary: answer.summary, sectionIds: ["s0"] }, topics: [] }, request, answer);
+  const applied = applyAnswer(request.conversation, request, result);
+  assert.notEqual(applied.destinationId, request.activeId);
+  assert.deepEqual(applied.conversation.explorations[applied.destinationId].source, request.selection);
+  assert.deepEqual(applied.conversation.explorations.root.messages, request.conversation.explorations.root.messages);
+  const payload = JSON.parse(organizerMessages(request, answer)[1].content);
+  assert.equal(payload.selectedPassage.text, "Wydad");
+  request.selection = { explorationId: "root", messageId: "clubs", sectionId: "club-list" };
+  assert.match(JSON.parse(organizerMessages(request, answer)[1].content).selectedPassage.text, /Wydad and Raja/);
+});
+
+test("detailed positions under one umbrella theme become separate topics without changing their text", () => {
+  const { request, answer, plan } = fixture();
+  request.question = "Explain different countries' positions on Western Sahara in detail.";
+  const subjects = ["Country A", "Country B", "Country C"];
+  answer.sections = subjects.map((title) => ({ title, body: `A detailed sample explanation of ${title}'s stated position; this is test data, not a current political claim.` }));
+  const topics = subjects.map((title, index) => ({ ...plan.topics[0], title, summary: `The position of ${title}.`, sectionIds: [`s${index}`] }));
+  const result = organizeAnswer({ ...plan, topics }, request, answer);
+  const applied = applyAnswer(request.conversation, request, result);
+  assert.deepEqual(applied.topicIds.map((id) => applied.conversation.explorations[id].title), subjects);
+  assert.deepEqual(result.topics!.flatMap((item) => item.sections), answer.sections);
+});
+
+test("organizer preserves annotation ownership and rejects crossed sections or unassigned annotation content", () => {
+  const { request, answer, plan } = fixture();
+  request.conversation.explorations.root.messages = [{ id: "options", role: "assistant", sections: [{ id: "option-a", title: "A", body: "Alpha" }, { id: "option-b", title: "B", body: "Beta" }] }];
+  request.annotations = [
+    { id: "alpha-note", source: { explorationId: "root", messageId: "options", sectionId: "option-a", quote: "Alpha" }, question: "How does this work?" },
+    { id: "beta-note", source: { explorationId: "root", messageId: "options", sectionId: "option-b", quote: "Beta" }, question: "What are its limits?" },
+  ];
+  answer.sections = [{ title: "Overview", body: "Two separately answered questions." }];
+  answer.topics = request.annotations.map((annotation) => ({ annotationId: annotation.id, targetId: "root", decision: "branch", title: annotation.id, summary: "A focused answer.", sections: [{ title: "Answer", body: `Exact content for ${annotation.id}.` }] }));
+  const annotatedPlan = { ...plan, primary: { ...plan.primary, sectionIds: ["s0"] }, topics: request.annotations.map((annotation, index) => ({ ...plan.topics[0], annotationId: annotation.id, sectionIds: [`s${index + 1}`] })) };
+  const result = organizeAnswer(annotatedPlan, request, answer);
+  assert.deepEqual(result.topics!.map((topic) => topic.annotationId), ["alpha-note", "beta-note"]);
+  assert.deepEqual(result.topics!.flatMap((topic) => topic.sections), answer.topics.flatMap((topic) => topic.sections));
+  for (const modify of [
+    (copy: typeof annotatedPlan) => { copy.topics[0].sectionIds = ["s2"]; copy.topics[1].sectionIds = ["s1"]; },
+    (copy: typeof annotatedPlan) => { copy.primary.sectionIds = ["s0", "s1"]; copy.topics.shift(); },
+    (copy: typeof annotatedPlan) => { copy.topics[1].annotationId = "invented"; },
+    (copy: typeof annotatedPlan) => { copy.topics[0].sectionIds = ["s0", "s1"]; copy.primary.sectionIds = []; },
+  ]) {
+    const copy = structuredClone(annotatedPlan); modify(copy);
+    assert.throws(() => organizeAnswer(copy, request, answer), /organized safely/);
+  }
+});

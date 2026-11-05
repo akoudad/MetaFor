@@ -8,17 +8,18 @@ import SpaceMap from "./SpaceMap";
 import TopicCard from "./TopicCard";
 import { getDepth, getPath } from "@/lib/model";
 import type { Conversation, SourceReference } from "@/lib/model";
+import { validateAnnotations } from "@/lib/ai";
 import { createConversation, applyAnswer } from "@/lib/session";
 import { loadSnapshot, saveSnapshot, backupSnapshot, listSnapshots, serializeSnapshot, parseSnapshot } from "@/lib/storage";
 import type { Snapshot } from "@/lib/storage";
-import type { AnswerRequest, AnswerResult, ModelStatus } from "@/lib/contracts";
+import type { AnnotationRequest, AnswerRequest, AnswerResult, ModelStatus } from "@/lib/contracts";
 import { normalizeText, messageText } from "@/lib/markdown";
-import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, applyPositionOverrides, fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
+import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, applyPositionOverrides, annotationView, fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
 import type { SpatialPoint } from "@/lib/spatial";
 import { consumeScrollGesture, stepSemanticScroll } from "@/lib/semantic-scroll";
 import type { ScrollGesture } from "@/lib/semantic-scroll";
 
-type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number };
+type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number; annotations?: AnnotationRequest[] };
 type Pointer = { x: number; y: number };
 type Pending = { request: AnswerRequest; error?: string; navigation: number };
 type TopicTransition = { key: string; fromId: string; toId: string; toIds?: string[]; follow: boolean };
@@ -48,6 +49,10 @@ export default function ConversationSpace() {
   const [positions, setPositions] = useState<Record<string, SpatialPoint>>({});
   const baseNodes = useMemo(() => layoutSpace(space), [space]);
   const nodes = useMemo(() => applyPositionOverrides(baseNodes, positions), [baseNodes, positions]);
+  const [annotationPair, setAnnotationPair] = useState<{ sourceId: string; replyId: string } | null>(null);
+  const [stageSize, setStageSize] = useState({ width: 1000, height: 700 });
+  const annotationFrame = useMemo(() => annotationPair ? annotationView(nodes, annotationPair.sourceId, annotationPair.replyId, stageSize.width, stageSize.height) : null, [nodes, annotationPair, stageSize]);
+  const presentedNodes = useMemo(() => annotationFrame ? applyPositionOverrides(nodes, annotationFrame.positions) : nodes, [nodes, annotationFrame]);
   const [overview, setOverview] = useState(false);
   const [choiceParentId, setChoiceParentState] = useState<string | null>(null);
   const [choiceTopicIds, setChoiceTopicIds] = useState<string[] | null>(null);
@@ -61,6 +66,9 @@ export default function ConversationSpace() {
   const [selection, setSelectionState] = useState<SourceReference | null>(null);
   const selectionNow = useRef<SourceReference | null>(null);
   const setSelection = useCallback((value: SourceReference | null) => { selectionNow.current = value; setSelectionState(value); }, []);
+  const [annotations, setAnnotationsState] = useState<AnnotationRequest[]>([]);
+  const annotationsNow = useRef<AnnotationRequest[]>([]);
+  const setAnnotations = useCallback((value: AnnotationRequest[]) => { annotationsNow.current = value; setAnnotationsState(value); }, []);
   const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
   const selectionAction = useRef<HTMLButtonElement>(null);
   const selectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,9 +126,13 @@ export default function ConversationSpace() {
   const navigation = useRef(0);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readerFocusFrame = useRef<number | null>(null);
+  const answerFocusFrame = useRef<number | null>(null);
+  const answerTargets = useRef(new Map<string, string>());
   const cancelReaderFocus = useCallback(() => {
     if (readerFocusFrame.current !== null) cancelAnimationFrame(readerFocusFrame.current);
     readerFocusFrame.current = null;
+    if (answerFocusFrame.current !== null) cancelAnimationFrame(answerFocusFrame.current);
+    answerFocusFrame.current = null;
   }, []);
   const active = space.explorations[activeId] ?? space.explorations[space.rootId];
   const path = getPath(space, active.id);
@@ -130,13 +142,28 @@ export default function ConversationSpace() {
   ], [space, activeId, connections]);
   const choices = useMemo(() => choiceParentId ? choiceTopicIds ? choiceTopicIds.map((id) => space.explorations[id]).filter(Boolean) : Object.values(space.explorations).filter((item) => item.parentId === choiceParentId) : [], [choiceParentId, choiceTopicIds, space]);
   const choiceIds = useMemo(() => choiceParentId ? [...new Set([choiceParentId, ...choices.flatMap((item) => getPath(space, item.id).map((ancestor) => ancestor.id)), ...(space.connections ?? []).filter((link) => link.type === "synthesis" && choices.some((item) => item.id === link.to)).map((link) => link.from)])] : undefined, [choiceParentId, choices, space]);
-  const pointFor = useCallback((id: string) => nodes.find((node) => node.id === id)?.position ?? { x: 0, y: 0, z: 0 }, [nodes]);
+  const pointFor = useCallback((id: string) => presentedNodes.find((node) => node.id === id)?.position ?? { x: 0, y: 0, z: 0 }, [presentedNodes]);
   const size = () => ({ width: stage.current?.clientWidth ?? 1000, height: stage.current?.clientHeight ?? 700 });
   const setCamera = (next: SpatialPoint) => { viewNow.current = next; setView(next); };
   useEffect(() => { viewNow.current = view; activeNow.current = activeId; spaceNow.current = space; }, [view, activeId, space]);
+  useEffect(() => {
+    const measure = () => { const next = size(); setStageSize((previous) => previous.width === next.width && previous.height === next.height ? previous : next); };
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    if (stage.current) observer?.observe(stage.current);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+  const priorStageSize = useRef(stageSize);
+  useEffect(() => {
+    const changed = priorStageSize.current.width !== stageSize.width || priorStageSize.current.height !== stageSize.height;
+    priorStageSize.current = stageSize;
+    if (changed && annotationFrame) setCamera(annotationFrame.view);
+  }, [stageSize, annotationFrame]);
 
   const markInteraction = useCallback(() => {
     dismissSelectionPreview(); cancelReaderFocus(); setScrollHint("");
+    if (!choiceNow.current) answerTargets.current.delete(activeNow.current);
     navigation.current += 1;
     if (transitionNow.current) {
       // A text edit or selection has no new camera target of its own. Stop an
@@ -147,28 +174,35 @@ export default function ConversationSpace() {
 
   const remember = useCallback(() => {
     const id = activeNow.current;
-    const readingView = overview || choiceNow.current ? saved.current[id]?.view ?? viewNow.current : viewNow.current;
-    saved.current[id] = { view: readingView, draft: draftNow.current, selection: selectionNow.current, scrollTop: readers.current.get(id)?.scrollTop ?? saved.current[id]?.scrollTop ?? 0 };
-  }, [overview]);
+    const canonicalPoint = nodes.find((node) => node.id === id)?.position;
+    const readingView = annotationPair && canonicalPoint ? focusView(canonicalPoint, size().width, size().height) : overview || choiceNow.current ? saved.current[id]?.view ?? viewNow.current : viewNow.current;
+    saved.current[id] = { view: readingView, draft: draftNow.current, selection: selectionNow.current, annotations: annotationsNow.current, scrollTop: readers.current.get(id)?.scrollTop ?? saved.current[id]?.scrollTop ?? 0 };
+  }, [overview, annotationPair, nodes]);
 
   const snapshot = useCallback((): Snapshot => {
     remember();
     const request = pendingNow.current?.request;
-    const recovery = request ? { requestId: request.requestId, activeId: request.activeId, question: request.question, selection: request.selection, includeIds: request.includeIds } : undefined;
-    return { format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation: spaceNow.current, view: { activeId: activeNow.current, view: choiceNow.current ? saved.current[activeNow.current]?.view ?? viewNow.current : viewNow.current, overview: choiceNow.current ? false : overview, started: started || Boolean(request), places: { ...saved.current }, history: [...history.current], positions, ...(recovery ? { pending: recovery } : {}) } };
-  }, [remember, space, active.id, view, overview, started, positions]);
+    const recovery = request ? { requestId: request.requestId, activeId: request.activeId, question: request.question, selection: request.selection, includeIds: request.includeIds, annotations: request.annotations } : undefined;
+    return { format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation: spaceNow.current, view: { activeId: activeNow.current, view: choiceNow.current ? saved.current[activeNow.current]?.view ?? viewNow.current : viewNow.current, overview: choiceNow.current ? false : overview, started: started || Boolean(request), places: { ...saved.current }, history: [...history.current], positions, ...(annotationPair && !overview && !choiceNow.current ? { annotationPair } : {}), ...(recovery ? { pending: recovery } : {}) } };
+  }, [remember, space, active.id, view, overview, started, positions, annotationPair]);
   const snapshotNow = useRef(snapshot);
   useLayoutEffect(() => { snapshotNow.current = snapshot; }, [snapshot]);
 
   const restore = (next: Snapshot) => {
     abort.current?.abort();
     markInteraction();
-    setChoiceParent(null); scrollGesture.current = null;
+    setChoiceParent(null); setAnnotationPair(null); scrollGesture.current = null;
     setPending(null); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = [];
+    answerTargets.current.clear();
     saved.current = next.view.places;
     history.current = next.view.history;
     let camera = next.view.view;
-    if (next.view.started && !next.view.overview && !Object.hasOwn(next.view.positions ?? {}, next.view.activeId)) {
+    if (next.view.annotationPair) {
+      const { sourceId, replyId } = next.view.annotationPair;
+      const frame = annotationView(layoutSpace(next.conversation, next.view.positions), sourceId, replyId, size().width, size().height);
+      if (frame) camera = frame.view;
+    }
+    if (next.view.started && !next.view.overview && !next.view.annotationPair && !Object.hasOwn(next.view.positions ?? {}, next.view.activeId)) {
       const point = layoutSpace(next.conversation).find((node) => node.id === next.view.activeId)!.position;
       const { width, height } = size();
       const distance = camera.z - point.z;
@@ -187,8 +221,10 @@ export default function ConversationSpace() {
     activeNow.current = next.view.activeId; setActiveId(next.view.activeId);
     setCamera(camera); setOverview(next.view.overview); setStarted(next.view.started);
     setPositions(next.view.positions ?? {});
+    setAnnotationPair(next.view.annotationPair ?? null);
     setDraft(next.view.places[next.view.activeId]?.draft ?? "");
     setSelection(next.view.places[next.view.activeId]?.selection ?? null);
+    setAnnotations(next.view.places[next.view.activeId]?.annotations ?? []);
     setIncludeIds([]); setMenu(false); setSavedChats(false); setConnections(false); setNotice("");
     hover.current = null; wheelAnchor.current = null;
     const recovery = next.view.pending;
@@ -220,7 +256,7 @@ export default function ConversationSpace() {
   useEffect(() => { void refreshStatus(); }, [refreshStatus]);
 
   useEffect(() => {
-    if (!ready || (!started && !draft)) return;
+    if (!ready || (!started && !draft && !annotations.length)) return;
     setSaveState("Saving…");
     const timer = setTimeout(() => {
       saveSnapshot(snapshotNow.current()).then(() => setSaveState("Saved locally")).catch((error) => {
@@ -228,18 +264,18 @@ export default function ConversationSpace() {
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [ready, space, view, activeId, draft, selection, positions, overview, started, scrollRevision, pending]);
+  }, [ready, space, view, activeId, draft, selection, annotations, positions, overview, started, scrollRevision, pending]);
 
   useEffect(() => {
     const save = () => {
-      if (!ready || (!started && !draft)) return;
+      if (!ready || (!started && !draft && !annotations.length)) return;
       try { backupSnapshot(snapshotNow.current()); }
       catch { setSaveState("Save failed"); setNotice("Could not save the latest changes. Export an .ingx copy before leaving."); }
     };
     const onVisibility = () => { if (document.visibilityState === "hidden") save(); };
     window.addEventListener("pagehide", save); document.addEventListener("visibilitychange", onVisibility);
     return () => { window.removeEventListener("pagehide", save); document.removeEventListener("visibilitychange", onVisibility); };
-  }, [ready, started, draft]);
+  }, [ready, started, draft, annotations]);
 
   useEffect(() => {
     if (!savedChats) return;
@@ -248,30 +284,60 @@ export default function ConversationSpace() {
     return () => { cancelled = true; };
   }, [savedChats, saveState]);
 
+  const revealNewAnswer = useCallback((id: string) => {
+    const messageId = answerTargets.current.get(id);
+    if (!messageId) return;
+    if (answerFocusFrame.current !== null) cancelAnimationFrame(answerFocusFrame.current);
+    const generation = navigation.current;
+    const deadline = performance.now() + 2200;
+    const reveal = () => {
+      answerFocusFrame.current = null;
+      if (navigation.current !== generation || activeNow.current !== id || choiceNow.current || performance.now() > deadline) return;
+      const reader = readers.current.get(id);
+      const node = reader?.closest<HTMLElement>("[data-node-id]");
+      const answer = reader?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+      if (reader && answer && node?.dataset.detail === "full" && node.style.visibility === "visible" && !node.inert) {
+        const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
+        if (scale > 0) {
+          reader.scrollTop += (answer.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 16;
+          answerTargets.current.delete(id);
+          if (saved.current[id]) saved.current[id].scrollTop = reader.scrollTop;
+          setScrollRevision((value) => value + 1);
+          return;
+        }
+      }
+      answerFocusFrame.current = requestAnimationFrame(reveal);
+    };
+    answerFocusFrame.current = requestAnimationFrame(reveal);
+  }, []);
+
   const focus = useCallback((id: string) => {
     if (switchingNow.current || !space.explorations[id]) return;
     remember(); markInteraction(); setChoiceParent(null);
     if (id !== activeId) pushHistory(activeId);
     const previous = saved.current[id];
     const { width, height } = size();
-    setCamera(focusView(pointFor(id), width, height));
+    const source = space.explorations[id].source;
+    const frame = source ? annotationView(nodes, source.explorationId, id, width, height) : null;
+    setAnnotationPair(frame && source ? { sourceId: source.explorationId, replyId: id } : null);
+    setCamera(frame?.view ?? focusView(pointFor(id), width, height));
     activeNow.current = id; setActiveId(id);
-    setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null);
+    setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setAnnotations(previous?.annotations ?? []);
     setIncludeIds([]); setStarted(true); setOverview(false); setNotice(""); setUnreadId(null);
-    hover.current = id; wheelAnchor.current = null;
-  }, [activeId, pointFor, remember, space]);
+    hover.current = id; wheelAnchor.current = null; revealNewAnswer(id);
+  }, [activeId, pointFor, remember, space, nodes, revealNewAnswer]);
 
   const showOverview = useCallback(() => {
     if (switchingNow.current || overview) return;
     remember(); markInteraction(); setChoiceParent(null);
     const { width, height } = size();
-    setCamera(fitOverview(nodes, width, height)); setStarted(true); setOverview(true);
+    setAnnotationPair(null); setCamera(fitOverview(nodes, width, height)); setStarted(true); setOverview(true);
     hover.current = null; wheelAnchor.current = null;
   }, [nodes, overview, remember]);
 
   const back = useCallback(() => {
     if (switchingNow.current) return;
-    markInteraction();
+    markInteraction(); setAnnotationPair(null);
     if (choiceNow.current) { const id = choiceNow.current; focus(id); setCamera(saved.current[id]?.view ?? focusView(pointFor(id), size().width, size().height)); return; }
     if (overview) { setCamera(saved.current[activeId]?.view ?? focusView(pointFor(activeId), size().width, size().height)); setOverview(false); return; }
     const id = history.current.pop() ?? active.parentId;
@@ -280,15 +346,15 @@ export default function ConversationSpace() {
     const previous = saved.current[id];
     activeNow.current = id; setActiveId(id);
     setCamera(previous?.view ?? focusView(pointFor(id), size().width, size().height));
-    setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setIncludeIds([]); setOverview(false); setNotice("");
+    setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setAnnotations(previous?.annotations ?? []); setIncludeIds([]); setOverview(false); setNotice("");
     hover.current = null; wheelAnchor.current = null;
   }, [active.parentId, activeId, overview, pointFor, remember, showOverview, space, focus]);
 
   const activate = useCallback((id: string) => {
     if (switchingNow.current || id === activeId || !space.explorations[id]) return;
-    remember(); markInteraction(); setChoiceParent(null); pushHistory(activeId);
+    remember(); markInteraction(); setChoiceParent(null); setAnnotationPair(null); pushHistory(activeId);
     activeNow.current = id; setActiveId(id);
-    setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setIncludeIds([]); setNotice("");
+    setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setAnnotations(saved.current[id]?.annotations ?? []); setIncludeIds([]); setNotice("");
   }, [activeId, remember, space]);
 
   const zoom = useCallback((delta: number, anchor?: SpatialPoint, anchorId?: string) => {
@@ -301,16 +367,16 @@ export default function ConversationSpace() {
     const { width, height } = size();
     const scale = height / (2 * Math.tan(25 * Math.PI / 180) * (next.z - point.z));
     const fullThreshold = Math.min(0.72, Math.max(0.1, (width - 32) / 600 * 0.9));
-    if (delta < 0 && scale >= fullThreshold) activate(id);
+    if (!annotationFrame && delta < 0 && scale >= fullThreshold) activate(id);
     setOverview(false);
-  }, [activeId, activate, pointFor]);
+  }, [activeId, activate, pointFor, annotationFrame]);
 
   const resumeTopic = useCallback((id: string) => {
     const leavingChoice = Boolean(choiceNow.current);
     const previousChoiceFocus = choicePanel.current?.contains(document.activeElement) ? document.activeElement : null;
     const camera = saved.current[id]?.view;
     focus(id);
-    if (camera) setCamera(camera);
+    if (camera && !space.explorations[id]?.source) setCamera(camera);
     if (leavingChoice) {
       const generation = navigation.current;
       const deadline = performance.now() + 1800;
@@ -327,7 +393,7 @@ export default function ConversationSpace() {
       };
       readerFocusFrame.current = requestAnimationFrame(focusWhenReadable);
     }
-  }, [focus]);
+  }, [focus, space]);
 
   useEffect(() => {
     if (choiceParentId) choicePanel.current?.querySelector<HTMLButtonElement>(".topic-choice-list button")?.focus({ preventScroll: true });
@@ -340,7 +406,7 @@ export default function ConversationSpace() {
     remember(); markInteraction();
     if (!children.length) { setScrollHint("Ask a follow-up to explore further."); return; }
     if (children.length === 1) { resumeTopic(children[0].id); return; }
-    setChoiceParent(id); setOverview(false);
+    setAnnotationPair(null); setChoiceParent(id); setOverview(false);
     const ids = new Set([id, ...children.map((item) => item.id)]);
     setCamera(fitOverview(nodes.filter((node) => ids.has(node.id)), size().width, size().height));
     hover.current = null; wheelAnchor.current = null;
@@ -371,8 +437,8 @@ export default function ConversationSpace() {
       }
       const nativeReader = target.closest<HTMLDivElement>('.world-node[data-detail="full"] .topic-reading');
       const nativeId = nativeReader?.closest<HTMLElement>("[data-topic]")?.dataset.topic;
-      if (!choiceNow.current && !overview && nativeId && nativeId !== activeNow.current) activate(nativeId);
-      const id = activeNow.current;
+      if (!annotationFrame && !choiceNow.current && !overview && nativeId && nativeId !== activeNow.current) activate(nativeId);
+      const id = annotationFrame && nativeId ? nativeId : activeNow.current;
       const choiceList = choiceNow.current ? target.closest<HTMLDivElement>(".topic-choice-list") : null;
       const reader = choiceList ?? readers.current.get(id);
       const node = reader?.closest<HTMLElement>("[data-node-id]");
@@ -417,7 +483,7 @@ export default function ConversationSpace() {
     element.addEventListener("wheel", wheel, { passive: false });
     chooser?.addEventListener("wheel", wheel, { passive: false });
     return () => { element.removeEventListener("wheel", wheel); chooser?.removeEventListener("wheel", wheel); };
-  }, [space, activate, pointFor, started, zoom, overview, choiceParentId, markInteraction, remember, resumeTopic, focus, showOverview, exploreChildren]);
+  }, [space, activate, pointFor, started, zoom, overview, choiceParentId, markInteraction, remember, resumeTopic, focus, showOverview, exploreChildren, annotationFrame]);
 
   useEffect(() => {
     const keydown = (event: globalThis.KeyboardEvent) => {
@@ -460,6 +526,8 @@ export default function ConversationSpace() {
     const focal = size().height / (2 * Math.tan(25 * Math.PI / 180));
     if (moving.current) {
       const { id, point, pointer } = moving.current;
+      if (annotationPair?.sourceId === id) activate(id);
+      setAnnotationPair(null);
       const scale = Math.max(0.05, focal / Math.max(100, renderedView.current.z - point.z));
       setPositions((current) => ({ ...current, [id]: { x: Math.max(-1e6, Math.min(1e6, point.x + (event.clientX - pointer.x) / scale)), y: Math.max(-1e6, Math.min(1e6, point.y - (event.clientY - pointer.y) / scale)), z: point.z } }));
     } else if (pointers.current.size === 2) {
@@ -579,19 +647,33 @@ export default function ConversationSpace() {
       setPending(null);
       const follow = activeNow.current === task.request.activeId && navigation.current === task.navigation;
       const topicIds = applied.topicIds ?? [];
+      topicIds.forEach((id, index) => answerTargets.current.set(id, `topic-answer-${task.request.requestId}-${index}`));
       const newTopicIds = topicIds.filter((id) => !before.explorations[id]);
       if (!topicIds.length && !before.explorations[applied.destinationId]) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: applied.destinationId, follow });
       if (follow) {
+        setAnnotationPair(null);
         if (applied.destinationId !== task.request.activeId) pushHistory(task.request.activeId);
         activeNow.current = applied.destinationId; setActiveId(applied.destinationId);
-        setDraft(saved.current[applied.destinationId]?.draft ?? ""); setSelection(null); setIncludeIds([]); setOverview(false);
+        setDraft(saved.current[applied.destinationId]?.draft ?? ""); setSelection(null); setAnnotations(saved.current[applied.destinationId]?.annotations ?? []); setIncludeIds([]); setOverview(false);
         const destination = layoutSpace(applied.conversation, positions).find((node) => node.id === applied.destinationId)!;
-        if (topicIds.length) {
+        const scopedId = topicIds.length === 1 ? topicIds[0] : !topicIds.length ? applied.destinationId : null;
+        const scopedTopic = scopedId ? applied.conversation.explorations[scopedId] : null;
+        const currentSource = scopedTopic?.messages.find((message) => message.role === "assistant" && (message.id === `answer-${task.request.requestId}` || message.id.startsWith(`topic-answer-${task.request.requestId}-`)))?.source;
+        const scopedSource = scopedTopic?.source && (!currentSource || JSON.stringify(currentSource) === JSON.stringify(scopedTopic.source)) ? scopedTopic.source : null;
+        if (scopedId && scopedSource) {
+          const frame = annotationView(layoutSpace(applied.conversation, positions), scopedSource.explorationId, scopedId, size().width, size().height);
+          activeNow.current = scopedId; setActiveId(scopedId); setChoiceParent(null);
+          setDraft(saved.current[scopedId]?.draft ?? ""); setAnnotations(saved.current[scopedId]?.annotations ?? []);
+          setAnnotationPair({ sourceId: scopedSource.explorationId, replyId: scopedId });
+          if (frame) setCamera(frame.view);
+          revealNewAnswer(scopedId);
+          setTransition({ key: task.request.requestId, fromId: scopedSource.explorationId, toId: scopedId, toIds: [scopedId], follow: true });
+        } else if (topicIds.length) {
           showAnswerTopics(applied.conversation, applied.destinationId, topicIds);
           if (newTopicIds.length) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: newTopicIds[0], toIds: newTopicIds, follow: true });
         }
         else setCamera(focusView(destination.position, size().width, size().height));
-        requestAnimationFrame(() => {
+        if (!task.request.selection && !task.request.annotations?.length) requestAnimationFrame(() => {
           const reader = readers.current.get(applied.destinationId);
           const answer = reader?.querySelector<HTMLElement>(`[data-message-id="answer-${CSS.escape(task.request.requestId)}"]`);
           if (reader && answer) {
@@ -613,7 +695,7 @@ export default function ConversationSpace() {
   };
 
   const showAnswerTopics = (conversation: Conversation, originId: string, topicIds: string[]) => {
-    setTransition(null); setChoiceParent(originId, topicIds); setOverview(false);
+    setTransition(null); setAnnotationPair(null); setChoiceParent(originId, topicIds); setOverview(false);
     const ids = new Set([originId, ...topicIds.flatMap((id) => getPath(conversation, id).map((item) => item.id)), ...(conversation.connections ?? []).filter((link) => link.type === "synthesis" && topicIds.includes(link.to)).map((link) => link.from)]);
     const laidOut = layoutSpace(conversation, positions);
     setCamera(fitOverview(laidOut.filter((node) => ids.has(node.id)), size().width, size().height));
@@ -622,24 +704,34 @@ export default function ConversationSpace() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (switchingNow.current || !draftNow.current.trim() || !ready) return;
+    if (switchingNow.current || (!draftNow.current.trim() && !annotationsNow.current.length) || !ready) return;
     if (pendingNow.current) { setNotice("Retry or dismiss the unfinished question before sending another."); return; }
-    const question = draftNow.current.trim();
+    const text = draftNow.current.trim();
+    const source = selectionNow.current;
+    const batch = [...annotationsNow.current];
+    if (batch.length && source) {
+      if (!text) { setNotice("Write a question for the selected passage, or clear the selection."); composer.current?.focus(); return; }
+      batch.push({ id: crypto.randomUUID(), source, question: text });
+    }
+    if (batch.length > 6 || batch.some((item) => !item.question.trim() || item.question.length > 8000) || batch.reduce((sum, item) => sum + item.question.length, 0) > 24000) {
+      setNotice("Add a question to every annotation. Send up to 6 at once, with 24,000 characters in total."); return;
+    }
+    try { if (batch.length) validateAnnotations(batch, spaceNow.current); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Check the selected passages before sending."); return; }
+    const question = batch.length && source || !text ? "Answer each annotated question separately." : text;
     if (question.length > 8000) { setNotice("Keep the question below 8,000 characters."); return; }
     if (choiceNow.current) resumeTopic(activeNow.current);
     markInteraction(); remember();
-    const source = selectionNow.current;
-    const originId = source?.explorationId ?? activeNow.current;
-    const request: AnswerRequest = { requestId: crypto.randomUUID(), conversation: spaceNow.current, activeId: originId, question, selection: source, mode: "auto", includeIds };
-    // The submitted question lives in its pending card. A fresh composer draft
-    // is independent, even when it happens to contain exactly the same words.
-    setDraft(""); setSelection(null); setIncludeIds([]);
-    saved.current[originId] = { ...saved.current[originId], draft: "", selection: null };
+    const originId = batch.length ? activeNow.current : source?.explorationId ?? activeNow.current;
+    const request: AnswerRequest = { requestId: crypto.randomUUID(), conversation: spaceNow.current, activeId: originId, question, selection: batch.length ? null : source, ...(batch.length ? { annotations: batch } : {}), mode: "auto", includeIds };
+    // Submitted annotations belong to this request. New drafts remain independent.
+    setDraft(""); setSelection(null); setAnnotations([]); setIncludeIds([]);
+    saved.current[activeNow.current] = { ...saved.current[activeNow.current], draft: "", selection: null, annotations: [] };
     setStarted(true);
     if (!started) setCamera(focusView(pointFor(originId), size().width, size().height));
-    const task = { request, navigation: navigation.current };
-    void runRequest(task);
-    requestAnimationFrame(() => { const reader = readers.current.get(originId); if (reader) reader.scrollTop = reader.scrollHeight; });
+    void runRequest({ request, navigation: navigation.current });
+    // Preserve the source passage while a scoped answer is being generated.
+    if (!source && !batch.length) requestAnimationFrame(() => { const reader = readers.current.get(originId); if (reader) reader.scrollTop = reader.scrollHeight; });
   };
   const cancel = () => {
     abort.current?.abort();
@@ -653,7 +745,7 @@ export default function ConversationSpace() {
 
   const resetLayout = () => {
     if (switchingNow.current || !started) return;
-    remember(); markInteraction(); setChoiceParent(null);
+    remember(); markInteraction(); setChoiceParent(null); setAnnotationPair(null);
     const { width, height } = size();
     for (const node of baseNodes) {
       const place = saved.current[node.id];
@@ -663,7 +755,7 @@ export default function ConversationSpace() {
     hover.current = null; wheelAnchor.current = null; setMenu(false);
   };
 
-  const keepCurrent = async () => { if (started || draft) await saveSnapshot(snapshot()); };
+  const keepCurrent = async () => { if (started || draft || annotations.length) await saveSnapshot(snapshot()); };
   const openFresh = async () => {
     if (!ready || switchingNow.current || (pending && !pending.error)) return;
     switchingNow.current = true; setSwitching(true);
@@ -724,8 +816,25 @@ export default function ConversationSpace() {
     setSpace((current) => ({ ...current, connections: current.connections?.map((link) => link.id === id ? { ...link, status: "accepted" } : link) }));
   };
   const dismissConnection = (id: string) => { if (switchingNow.current) return; setSpace((current) => ({ ...current, connections: current.connections?.filter((link) => link.id !== id) })); };
-  const chooseSection = (source: SourceReference) => { if (switchingNow.current) return; markInteraction(); if (choiceNow.current) resumeTopic(source.explorationId); else if (source.explorationId !== activeId) activate(source.explorationId); setSelection(source); composer.current?.focus(); };
-  const openSource = (source: SourceReference) => {
+  const queueAnnotation = () => {
+    const source = selectionNow.current;
+    const question = draftNow.current.trim();
+    if (!source || !question) return false;
+    if (annotationsNow.current.length >= 6) { setNotice("Send these six annotations before adding another."); return false; }
+    setAnnotations([...annotationsNow.current, { id: crypto.randomUUID(), source, question }]);
+    setSelection(null); setDraft("");
+    return true;
+  };
+  const chooseSection = (source: SourceReference) => {
+    if (switchingNow.current) return;
+    markInteraction();
+    if (selectionNow.current && draftNow.current.trim() && !queueAnnotation()) return;
+    if (annotationsNow.current.length >= 6) { setNotice("Send these six annotations before adding another."); return; }
+    if (choiceNow.current) resumeTopic(source.explorationId);
+    else if (!annotationsNow.current.length && source.explorationId !== activeId) activate(source.explorationId);
+    setSelection(source); setNotice(""); composer.current?.focus();
+  };
+  const openSource = (source: SourceReference, select = true) => {
     if (switchingNow.current) return;
     const conversationId = space.id;
     focus(source.explorationId);
@@ -737,14 +846,14 @@ export default function ConversationSpace() {
         const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
         reader.scrollTop += (section.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 12;
       }
-      setSelection(source);
+      if (select) setSelection(source);
     });
   };
   const selectedMessage = selection && space.explorations[selection.explorationId]?.messages.find((message) => message.id === selection.messageId);
   const selectionLabel = selection?.quote ?? selectedMessage?.sections.find((section) => section.id === selection?.sectionId)?.title;
   const suggestions = (space.connections ?? []).filter((link) => link.from === activeId || link.to === activeId);
 
-  return <main className="space" aria-busy={switching}>
+  return <main className={`space ${annotations.length ? "has-annotations" : ""}`} aria-busy={switching}>
     <header className="topbar">
       <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metaphore</button>
       <div className="top-actions">
@@ -755,7 +864,7 @@ export default function ConversationSpace() {
       </div>
     </header>
     {started && <nav className="breadcrumbs" aria-label="Conversation path"><button onClick={back} aria-label="Return to previous view">←</button>{path.map((item, index) => <span key={item.id}>{index > 0 && <i>/</i>}<button onClick={() => focus(item.id)} aria-current={item.id === activeId ? "page" : undefined}>{item.title}</button></span>)}</nav>}
-    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll to read the current answer, even over empty space. At its end, pause and scroll again to explore connected topics.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, then write your question below. Related ideas stay connected as your conversation grows.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Scroll up from the beginning to return. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 shows everything.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
+    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll to read the current answer, even over empty space. At its end, pause and scroll again to explore connected topics.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, and write a question. Select another passage to queue the first annotation. Send them together for separate linked replies.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Scroll up from the beginning to return. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 shows everything.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
     {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
       <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
       <p className="panel-explainer">Saved in this browser.</p>
@@ -778,8 +887,8 @@ export default function ConversationSpace() {
     </aside>}
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
     <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
-      <SpatialWorld nodes={started ? nodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds}>
-        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} pendingQuestion={pending?.request.activeId === node.id ? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onExplore={() => { scrollGesture.current = consumeScrollGesture(`${space.id}:topic:${node.id}`, 1, performance.now()); exploreChildren(node.id); }} onSource={openSource} readingRef={(element) => {
+      <SpatialWorld nodes={started ? presentedNodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds ?? annotationFrame?.visibleIds} fullDetailIds={annotationFrame?.visibleIds}>
+        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onExplore={() => { scrollGesture.current = consumeScrollGesture(`${space.id}:topic:${node.id}`, 1, performance.now()); exploreChildren(node.id); }} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
         }} onScroll={(top) => {
@@ -800,12 +909,22 @@ export default function ConversationSpace() {
     {scrollHint && <p className="scroll-boundary-hint" role="status">{scrollHint}</p>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
-    {started && <SpaceMap nodes={nodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
+    {started && <SpaceMap nodes={presentedNodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
     <div className="composer-dock">
       {notice && <p className="composer-notice" role="status">{notice}{unreadId && <button onClick={openUnread}>Open answer ↗</button>}<button onClick={() => setNotice("")} aria-label="Dismiss notice">×</button></p>}
+      {annotations.length > 0 && <section className="annotation-queue" aria-label="Queued annotations">
+        <div className="annotation-queue-heading"><span>{annotations.length} {annotations.length === 1 ? "annotation" : "annotations"} ready</span><span>Select another passage to add</span></div>
+        <div className="annotation-queue-list">{annotations.map((item, index) => <div className="annotation-draft" key={item.id}>
+          <button className="annotation-number" aria-label={`Show source for annotation ${index + 1}`} onClick={() => openSource(item.source, false)}>{index + 1}</button>
+          <div><p>{item.source.quote ?? space.explorations[item.source.explorationId]?.messages.find((message) => message.id === item.source.messageId)?.sections.find((section) => section.id === item.source.sectionId)?.title ?? "Selected section"}</p><textarea aria-label={`Question for annotation ${index + 1}`} value={item.question} rows={1} maxLength={8000} onChange={(event) => { markInteraction(); setAnnotations(annotationsNow.current.map((entry) => entry.id === item.id ? { ...entry, question: event.target.value } : entry)); }} /></div>
+          <button aria-label={`Remove annotation ${index + 1}`} onClick={() => { markInteraction(); setAnnotations(annotationsNow.current.filter((entry) => entry.id !== item.id)); }}>×</button>
+        </div>)}</div>
+        <button className="send-annotations" type="button" disabled={Boolean(pending && !pending.error)} onClick={() => composer.current?.form?.requestSubmit()}>Send {annotations.length + (selection && draft.trim() ? 1 : 0)} annotations ↑</button>
+      </section>}
       {selection && <div className="selection-chip"><span>About</span><p>{selectionLabel || "Selected section"}</p><button onClick={() => { markInteraction(); setSelection(null); }} aria-label="Clear selected passage">×</button></div>}
+      {selection && draft.trim() && <button className="queue-annotation" onClick={() => { markInteraction(); if (queueAnnotation()) setNotice("Select another passage, or send your annotation now."); }}>Add another annotation +</button>}
       {started && <div className="composer-context"><span>{active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
-      <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={draft} onChange={(event) => { markInteraction(); setDraft(event.target.value); }} onKeyDown={composerKeydown} aria-label="Your question" placeholder={selection ? "Ask about this passage" : "Ask anything"} rows={1} maxLength={8000} disabled={!ready || switching} />{draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
+      <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={draft} onChange={(event) => { markInteraction(); setDraft(event.target.value); }} onKeyDown={composerKeydown} aria-label="Your question" placeholder={selection ? "Ask about this passage" : annotations.length ? "Optional instructions for these annotations" : "Ask anything"} rows={1} maxLength={8000} disabled={!ready || switching} />{draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
     </div>
     {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onSubmit={(event) => { event.preventDefault(); setShowAccess(false); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => setShowAccess(false)} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}
     {switching && <div className="workspace-transition" role="status">Opening conversation…</div>}

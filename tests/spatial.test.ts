@@ -9,6 +9,7 @@ import {
   FIELD_OF_VIEW,
   MAX_DISTANCE,
   MIN_DISTANCE,
+  annotationView,
   applyPositionOverrides,
   connectionBounds,
   connectionEndpoints,
@@ -270,6 +271,45 @@ test("focus fits a complete card and preserves its world center", () => {
     assert.ok(CARD_WIDTH / 2 < distance * tangent * width / height);
     assert.ok(CARD_HEIGHT / 2 < distance * tangent);
   }
+});
+
+test("annotation reading frames a reply beside its source without changing graph or manual positions", () => {
+  const nodes = [
+    { id: "source", position: { x: 8000, y: -1400, z: 2800 } },
+    { id: "reply", position: { x: -380, y: -1680, z: -840 } },
+    { id: "unrelated", position: { x: 7340, y: -1400, z: 2800 } },
+  ];
+  const original = structuredClone(nodes);
+  for (const [width, height] of [[1440, 700], [1100, 500], [1100, 450], [1280, 720]]) {
+    const frame = annotationView(nodes, "source", "reply", width, height)!;
+    assert.equal(frame.paired, true);
+    assert.deepEqual(frame.visibleIds, ["source", "reply"], "only the selected source and reply belong in the reading presentation");
+    assert.equal(Object.hasOwn(frame.positions, "source"), false);
+    const presented = applyPositionOverrides(nodes, frame.positions).filter((node) => frame.visibleIds.includes(node.id));
+    assert.deepEqual(presented[0], nodes[0], "the source retains its actual manually placed position");
+    assert.ok(presented[1].position.x < presented[0].position.x);
+    assert.equal(presented[1].position.y, presented[0].position.y);
+    assert.equal(presented[1].position.z, presented[0].position.z);
+    assertSeparatedOverview(presented, width, height, frame.view);
+    assert.ok(projectedCards(presented, frame.view, width, height).every((card) => card.scale >= 0.8));
+  }
+  assert.deepEqual(nodes, original, "paired reading is temporary and must not rearrange the conversation map");
+});
+
+test("annotation reading on narrow or short stages focuses the reply with its source reference", () => {
+  const nodes = [
+    { id: "source", position: { x: 0, y: 0, z: 0 } },
+    { id: "reply", position: { x: -380, y: -840, z: -420 } },
+  ];
+  for (const [width, height] of [[390, 700], [800, 650], [1440, 350], [320, 200]]) {
+    const frame = annotationView(nodes, "source", "reply", width, height)!;
+    assert.equal(frame.paired, false);
+    assert.deepEqual(frame.visibleIds, ["reply"]);
+    assert.deepEqual(frame.positions, {});
+    assert.deepEqual(frame.view, focusView(nodes[1].position, width, height));
+  }
+  assert.equal(annotationView(nodes, "missing", "reply", 1440, 700), null);
+  assert.equal(annotationView(nodes, "source", "missing", 1440, 700), null);
 });
 
 test("zoom keeps the chosen anchor in place on screen and reverses before reaching limits", () => {

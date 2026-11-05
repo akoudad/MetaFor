@@ -214,3 +214,60 @@ test("multiple synthesis outputs remain atomic and each keeps its own source set
   assert.throws(() => applyAnswer(cities.conversation, input, { ...response, topics: [response.topics![0], { ...response.topics![1], sourceIds: ["invented-city", cities.topicIds[3]] }] }), /synthesis/);
   assert.equal(JSON.stringify(cities.conversation), original);
 });
+
+function annotationBatch() {
+  const space = createSampleConversation();
+  const input = { ...request(space), question: "Answer each annotated question separately.", annotations: [
+    { id: "company-note", source: { explorationId: "job-search", messageId: "job-search-answer", sectionId: "companies", quote: "Compensation is one part of that comparison." }, question: "How should I compare this?" },
+    { id: "equity-note", source: { explorationId: "compensation", messageId: "compensation-answer", sectionId: "compensation-equity" }, question: "What changes this value?" },
+  ] };
+  const response: AnswerResult = { ...answer(input), decision: "continue", context: { fullIds: ["job-search", "compensation"], summaryIds: ["equity"], truncated: false }, sections: [{ title: "Overview", body: "Each selected passage has its own answer." }], topics: input.annotations.map((annotation) => ({ annotationId: annotation.id, targetId: annotation.source.explorationId, decision: "branch", title: annotation.id, summary: "A focused answer.", sections: [{ title: "Answer", body: `Reply to ${annotation.id}.` }] })) };
+  return { space, input, response };
+}
+
+test("annotation batches atomically preserve each distinct question and source, including replay", () => {
+  const { space, input, response } = annotationBatch();
+  const original = JSON.stringify(space);
+  const result = applyAnswer(space, input, response);
+  result.topicIds.forEach((id, index) => {
+    const topic = result.conversation.explorations[id];
+    const annotation = input.annotations[index];
+    assert.equal(topic.parentId, annotation.source.explorationId);
+    assert.deepEqual(topic.source, annotation.source);
+    assert.deepEqual(topic.messages[0].source, annotation.source);
+    assert.deepEqual(topic.messages[1].source, annotation.source);
+    assert.equal(topic.messages[0].sections[0].body, annotation.question);
+    assert.equal(topic.messages[1].sections[0].body, response.topics![index].sections[0].body);
+  });
+  assert.equal(result.conversation.explorations[result.destinationId].messages.at(-1)!.source, null);
+  assert.equal(JSON.stringify(space), original);
+  const retry = applyAnswer(result.conversation, input, { ...response, topics: [] });
+  assert.equal(retry.conversation, result.conversation);
+  assert.deepEqual(retry.destinationIds, result.destinationIds);
+});
+
+test("annotation output can reuse a dedicated existing topic while keeping its original quote", () => {
+  const { space, input, response } = annotationBatch();
+  response.topics![1] = { ...response.topics![1], targetId: "equity", decision: "continue" };
+  const result = applyAnswer(space, input, response);
+  assert.equal(result.topicIds[1], "equity");
+  const topic = result.conversation.explorations.equity;
+  assert.equal(topic.messages.length, space.explorations.equity.messages.length + 2);
+  assert.deepEqual(topic.messages.at(-1)!.source, input.annotations[1].source);
+  assert.equal(topic.messages.at(-2)!.sections[0].body, input.annotations[1].question);
+});
+
+test("missing, duplicate, or crossed annotation outputs reject the whole batch without mutation", () => {
+  const { space, input, response } = annotationBatch();
+  const original = JSON.stringify(space);
+  for (const topics of [
+    [],
+    [response.topics![0]],
+    [response.topics![0], { ...response.topics![1], annotationId: response.topics![0].annotationId }],
+    [response.topics![0], { ...response.topics![1], targetId: "job-search" }],
+    [response.topics![0], { ...response.topics![1], annotationId: "invented" }],
+  ]) {
+    assert.throws(() => applyAnswer(space, input, { ...response, topics }), /annotation/);
+    assert.equal(JSON.stringify(space), original);
+  }
+});
