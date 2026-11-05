@@ -4,9 +4,11 @@ A three-minute outline, excluding live generation waits. Rehearse in the actual
 browser before recording. The latest backend run passed four app requests / eight
 model calls: an inline shortlist, four city topics, three existing-city
 continuations, and a seven-day itinerary with four incoming synthesis edges.
-Replay and `.ingx` round trips passed. Native Safari checks on the local production
+Replay and `.ingx` round trips passed. Earlier native Safari checks on the local production
 build verified the imported graph's layout, synthesis source links, reading-position
-restoration, section ask action and composer focus, chooser, and final overview.
+restoration, section ask action and composer focus, the former chooser, and final
+overview. The current navigation update has a separate verification record in the
+[experience review](experience-review.md).
 Physical trackpad/touch gestures, device performance, live arrival motion, and
 public deployment remain unverified.
 
@@ -40,10 +42,13 @@ placement rather than promising a particular graph.
    their trade-offs. If a synthesis topic is created, show its directed input
    arrows and the original topics that remain available. This is a new answer,
    not a destructive merge of the old discussions.
-6. **Navigate and resume.** Read with the wheel. Follow a topic link or choose
-   **Explore topics**, then use **Back** to return to your reading place.
-   Use **Map** for the wider conversation. Drag a topic, reset the layout, then reopen the conversation
-   through **Saved chats**. Export an `.ingx` copy.
+6. **Navigate and resume.** Scroll inside a topic to read. Move into empty space
+   and scroll down to explore details; choose a title if several paths appear.
+   Scroll up to its parent, or use **Back** to retrace your visits.
+   Open **Conversation map**, hover a dot to preview its title, and jump there.
+   Show **Thinking…** while a reply is pending, even when visiting another topic.
+   Drag a topic, reset the layout, then reopen the conversation through
+   **Saved chats**. Export an `.ingx` copy.
 7. **Explain the implementation.** “The writer creates content. The organizer
    assigns its sections to the conversation. The app checks every section is
    used exactly once, validates references, and applies the result together.”

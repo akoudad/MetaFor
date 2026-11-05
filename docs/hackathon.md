@@ -2,7 +2,7 @@
 
 Local release candidate · 2026-11-05
 
-## Implemented and checked
+## Implemented
 
 - [x] Real Meta answers with readable sections.
 - [x] Select text in any completed answer; use the nearby Ask about this action to reply.
@@ -16,20 +16,21 @@ Local release candidate · 2026-11-05
 - [x] Truthful source arrows, optional related topics, manual placement, and Reset layout.
 - [x] Empty start, visible New chat / Saved chats, and preserved unfinished drafts.
 - [x] Clear submitted input immediately; retain pending questions separately for retry.
+- [x] Show Thinking… and Stop beside the pulsing orb throughout a pending reply.
 - [x] Saved-conversation library, reload recovery, and validated `.ingx` import/export.
 - [x] Preserve existing work when a request, save, or import fails.
 - [x] Long-answer outline and keyboard navigation through a crowded space.
-- [x] Source-to-detail arrival motion and a navigable isometric mini-map.
-- [x] Wheel/trackpad reading with parent/child navigation at edges and an explicit path chooser.
-- [x] Preserve reading positions and drafts when returning, including after a chooser reload.
+- [x] Source-to-detail arrival motion and a Conversation map with hover/focus title previews.
+- [x] Read inside topics; navigate the hierarchy by scrolling in empty space. Choose paths directly in the graph.
+- [x] Preserve reading positions and drafts when returning, including after reloading a graph choice.
 - [x] Varied drifting stars, a faint galaxy, restrained meteors, a glowing orb, and star cursor.
 - [x] Setup, deployment instructions, example file, and a short demo script.
 
 ## Verification
 
-- 183 automated tests pass, including 57 integrated conversation UI tests,
-  organizer validation, atomic batches, synthesis, and scene DOM checks.
-- Type checking and the production build pass.
+- The previous pass completed with 185 automated tests, type checking, and a
+  production build passing. Current navigation-update results belong in the
+  [experience review](experience-review.md); prior results do not verify new changes.
 - Four real app requests (eight `muse-spark-1.3` calls) kept a short city list
   together, created four city guides, placed three briefings in their existing
   city topics, and produced an itinerary with four incoming synthesis links.
@@ -59,12 +60,12 @@ Local release candidate · 2026-11-05
   reduced motion, and cleanup. Mini-map tests cover large/extreme layouts and
   keyboard navigation. Pending-question tests cover Stop, retry, Dismiss, reload
   without automatic sending, and preservation of a separately typed next draft.
-- Semantic-scroll tests cover native and empty-space reading, one transition per
-  gesture, parent/child paths, chooser scrolling, keyboard focus, leaf guidance,
-  zoom isolation, and saved-place recovery. These simulate wheel sequences;
-  physical trackpad inertia still needs a browser check.
-- Safari inspection of the production build verified importing the real graph,
-  reading individual city topics, section follow-up selection, the topic chooser,
+- Current scroll verification must cover topic-owned reading, empty-space
+  hierarchy navigation, one transition per gesture, pointer crossings, direct
+  graph keyboard choice, zoom isolation, and saved-place recovery. Simulated
+  wheel sequences do not establish physical trackpad behavior.
+- Earlier Safari inspection of the production build verified importing the real graph,
+  reading individual city topics, section follow-up selection, the former topic chooser,
   synthesis source links, and restoring a previous reading position.
 
 ## Remaining release checks

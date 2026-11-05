@@ -213,6 +213,12 @@ function wheelSpace(deltaY: number, options: { ctrlKey?: boolean; deltaX?: numbe
   return ui.fireEvent.wheel(document.querySelector(".world-stage")!, { deltaY, deltaMode: 0, ...options });
 }
 
+async function choiceGraph() {
+  await ui.waitFor(() => assert.ok(document.querySelector(".world-stage[data-choice-parent]")));
+  assert.equal(document.querySelector(".topic-choice"), null, "choices belong in the graph, not a separate panel");
+  return document.querySelector<HTMLElement>(".world-stage[data-choice-parent]")!;
+}
+
 async function quietWheel() {
   await ui.act(async () => { await new Promise((resolve) => setTimeout(resolve, 220)); });
 }
@@ -398,7 +404,7 @@ test("section Ask controls still attach a source directly without submitting a q
   assert.equal(requests.length, 0);
 });
 
-test("plain wheel reads the answer natively or forwards blank-space movement to its visible reader", async () => {
+test("plain wheel inside text stays native and topic headers read without changing views", async () => {
   const user = await open(fixture());
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
   await user.type(composer, "Keep my research draft");
@@ -407,19 +413,20 @@ test("plain wheel reads the answer natively or forwards blank-space movement to 
   const camera = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!.style.transform;
   assert.equal(ui.fireEvent.wheel(reader, { deltaY: 120, deltaMode: 0 }), true, "ordinary text reading retains native browser scrolling");
   assert.equal(reader.scrollTop, 300, "jsdom does not emulate the browser's native wheel default");
+  const header = document.querySelector('[data-topic="observatory"] .topic-header')!;
   reader.scrollTop = 420; ui.fireEvent.scroll(reader);
-  assert.equal(wheelSpace(80), false, "the app owns wheel movement over blank space");
-  assert.ok(reader.scrollTop > 420, "blank space advances the visible active answer");
+  assert.equal(ui.fireEvent.wheel(header, { deltaY: 80 }), false, "the app forwards header scrolling to that topic's reader");
+  assert.ok(reader.scrollTop > 420);
   const advanced = reader.scrollTop;
-  wheelSpace(-60);
-  assert.ok(reader.scrollTop < advanced, "blank space also reads upward while text remains");
+  ui.fireEvent.wheel(header, { deltaY: -60 });
+  assert.ok(reader.scrollTop < advanced);
   assert.equal(document.querySelector<HTMLElement>('[data-node-id="observatory"]')!.style.transform, camera);
   assert.equal(activeTopic(), "Go to Plan an observatory");
   assert.equal(composer.value, "Keep my research draft");
   assert.equal(requests.length, 0);
 });
 
-test("repeated slow and fast wheel bursts at either edge never navigate or move the camera", async () => {
+test("topic-owned slow and fast wheel bursts at either edge never navigate even when crossing into space", async () => {
   await open(fixture("weather"));
   const reader = readerFor("weather");
   const node = document.querySelector<HTMLElement>('[data-node-id="weather"]')!;
@@ -427,14 +434,14 @@ test("repeated slow and fast wheel bursts at either edge never navigate or move 
   for (const direction of [1, -1]) {
     reader.scrollTop = direction > 0 ? reader.scrollHeight - reader.clientHeight : 0;
     for (const delta of [5, 35, 120, 300]) {
-      wheelSpace(delta * direction);
       ui.fireEvent.wheel(reader, { deltaY: delta * direction });
+      wheelSpace(delta * direction);
       await quietWheel();
       assert.equal(activeTopic(), "Go to Weather records");
       assert.equal(node.style.transform, camera);
     }
   }
-  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
   assert.equal(requests.length, 0);
 });
 
@@ -450,21 +457,18 @@ test("short answers and native reader edges keep native scroll without navigatio
   }
 });
 
-test("Explore opens a chooser, wheel reads it, and Back restores the parent place", async () => {
+test("Explore shows graph choices and Back restores the parent reading place", async () => {
   const user = await open(fixture());
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
   await user.type(composer, "Keep the parent draft");
   const reader = readerFor("observatory");
   reader.scrollTop = 315; ui.fireEvent.scroll(reader);
   await user.click(ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" }));
-  const chooser = ui.screen.getByRole("complementary", { name: "Choose a topic" });
-  const list = document.querySelector<HTMLElement>(".topic-choice-list")!;
-  for (const deltaY of [-300, 300]) {
-    assert.equal(ui.fireEvent.wheel(list, { deltaY }), true);
-    wheelSpace(deltaY); await quietWheel();
-    assert.ok(ui.screen.getByRole("complementary", { name: "Choose a topic" }));
-  }
-  await user.click(ui.within(chooser).getByRole("button", { name: "Explore Weather records" }));
+  const graph = await choiceGraph();
+  assert.equal(graph.querySelectorAll("button[data-graph-choice]").length, 2);
+  wheelSpace(300); await quietWheel();
+  assert.equal(graph.dataset.choiceParent, "observatory", "downward scrolling must not pick an arbitrary child");
+  await user.click(ui.within(graph).getByRole("button", { name: "Enter Weather records" }));
   assert.equal(activeTopic(), "Go to Weather records");
   await user.click(ui.screen.getByRole("button", { name: "Return to previous view" }));
   assert.equal(activeTopic(), "Go to Plan an observatory");
@@ -489,14 +493,25 @@ test("Back follows visits while breadcrumb follows ancestry and normal focus rea
   assert.equal(reader.scrollTop, 315);
 });
 
-test("the keyboard chooser returns focus and Escape in a draft does not navigate", async () => {
+test("keyboard graph choices cycle, open, and return focus without consuming draft Escape", async () => {
   const user = await open(fixture());
   const reader = readerFor("observatory");
   reader.scrollTop = 315; ui.fireEvent.scroll(reader);
   ui.act(() => ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" }).focus());
   await user.keyboard("{Enter}");
-  const chooser = ui.screen.getByRole("complementary", { name: "Choose a topic" });
-  await ui.waitFor(() => assert.equal(chooser.contains(document.activeElement), true));
+  const graph = await choiceGraph();
+  const choices = [...graph.querySelectorAll<HTMLButtonElement>("button[data-graph-choice]")];
+  await ui.waitFor(() => assert.equal(document.activeElement, choices[0]));
+  await user.keyboard("{ArrowRight}");
+  assert.equal(document.activeElement, choices[1]);
+  await user.keyboard("{ArrowLeft}");
+  assert.equal(document.activeElement, choices[0]);
+  await user.keyboard("{Enter}");
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
+  await ui.waitFor(() => assert.equal(document.activeElement, readerFor("weather")));
+  await user.click(ui.screen.getByRole("button", { name: "Return to previous view" }));
+  await user.click(ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" }));
+  await choiceGraph();
   await user.keyboard("{Escape}");
   await ui.waitFor(() => assert.ok(document.activeElement === reader, "focus returns to the parent reader"));
   assert.equal(reader.scrollTop, 315);
@@ -518,7 +533,7 @@ test("reloading during a fork restores the parent reading view, passage, draft, 
   ui.fireEvent.pageHide(window);
   const before = (await storage.loadSnapshot("ui-observatory"))!;
   await user.click(ui.screen.getByRole("button", { name: "Explore topics from Plan an observatory" }));
-  assert.ok(ui.screen.getByRole("complementary", { name: "Choose a topic" }));
+  await choiceGraph();
   ui.fireEvent.pageHide(window);
   const saved = (await storage.loadSnapshot("ui-observatory"))!;
   assert.deepEqual(saved.view.view, before.view.view, "a transient fork camera must not become the saved reading camera");
@@ -529,7 +544,7 @@ test("reloading during a fork restores the parent reading view, passage, draft, 
   assert.deepEqual(saved.view.places.observatory.selection, before.view.places.observatory.selection);
   ui.cleanup();
   await open();
-  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
   assert.equal(activeTopic(), "Go to Plan an observatory");
   assert.equal(readerFor("observatory").scrollTop, 315);
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Compare these site constraints");
@@ -537,24 +552,27 @@ test("reloading during a fork restores the parent reading view, passage, draft, 
   assert.equal(requests.length, 0);
 });
 
-test("overview stays a map until a topic is chosen; only deliberate zoom moves its camera", async () => {
+test("empty-space scrolling moves between reading, parent, graph choices, and overview one gesture at a time", async () => {
   const user = await open(fixture());
   const reader = readerFor("observatory");
   reader.scrollTop = 315; ui.fireEvent.scroll(reader);
-  await user.click(ui.screen.getByRole("button", { name: "Overview" }));
-  const node = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
-  const before = node.style.transform;
-  wheelSpace(120); await quietWheel(); wheelSpace(-300);
-  assert.equal(node.style.transform, before);
+  wheelSpace(120);
+  const graph = await choiceGraph();
+  assert.equal(graph.dataset.choiceParent, "observatory");
+  wheelSpace(-300);
+  assert.equal(graph.dataset.choiceParent, "observatory", "reversal in the same gesture cannot leave the graph");
+  await quietWheel(); wheelSpace(-120);
+  await ui.waitFor(() => assert.equal(graph.dataset.choiceParent, undefined));
   assert.equal(reader.scrollTop, 315);
-  assert.ok(ui.screen.getByText("Plan an observatory, depth 0, overview"));
-  wheelSpace(120, { ctrlKey: true });
-  await ui.waitFor(() => assert.notEqual(node.style.transform, before));
+  await quietWheel(); wheelSpace(-120);
+  await ui.screen.findByText("Plan an observatory, depth 0, overview");
+  await quietWheel(); wheelSpace(120);
+  await ui.waitFor(() => assert.equal(ui.screen.queryByText("Plan an observatory, depth 0, overview"), null));
   assert.equal(reader.scrollTop, 315);
-  await user.click(ui.screen.getByRole("button", { name: "Center current topic" }));
-  await ui.waitFor(() => assert.equal(node.dataset.detail, "full"));
-  wheelSpace(80);
-  assert.ok(reader.scrollTop > 315);
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await quietWheel(); wheelSpace(-120);
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Plan an observatory"));
+  assert.equal(reader.scrollTop, 315);
 });
 
 test("a fresh chat is empty and its first answer is placed automatically", async () => {
@@ -601,9 +619,9 @@ test("a city batch creates four explicit choices and later histories retain thei
   assert.equal(Object.keys(first.conversation.explorations).length, 1, "a brief shortlist stays in one answer");
   const originalAnswer = structuredClone(first.conversation.explorations.root.messages[1]);
   await user.type(composer, "Give me seven places in each city{Enter}");
-  const cityChooser = await ui.screen.findByRole("complementary", { name: "Choose a topic" });
-  assert.equal(cityChooser.querySelectorAll(".topic-choice-list button").length, 4);
-  for (const city of cities) assert.ok(ui.within(cityChooser).getByRole("button", { name: `Explore ${city}` }));
+  const cityGraph = await choiceGraph();
+  assert.equal(cityGraph.querySelectorAll("button[data-graph-choice]").length, 4);
+  for (const city of cities) assert.ok(ui.within(cityGraph).getByRole("button", { name: `Enter ${city}` }));
   assert.equal(activeTopic(), "Go to Morocco trip", "a batch must not choose its first destination for the user");
   const organized = await currentSnapshot();
   assert.equal(Object.keys(organized.conversation.explorations).length, 5);
@@ -615,17 +633,16 @@ test("a city batch creates four explicit choices and later histories retain thei
     assert.equal(topic.parentId, "root");
     assert.equal(topic.messages.at(-1)!.sections.length, 7);
   }
-  await user.click(ui.within(cityChooser).getByRole("button", { name: "Explore Marrakesh" }));
+  await user.click(ui.within(cityGraph).getByRole("button", { name: "Enter Marrakesh" }));
   await user.type(composer, "Keep this city draft");
   const cityReader = readerFor(cityIds.Marrakesh);
   cityReader.scrollTop = 315; ui.fireEvent.scroll(cityReader);
   await user.click(ui.screen.getByRole("button", { name: "Go to Morocco trip" }));
   await user.type(composer, "Explain the histories of the first three cities{Enter}");
-  const historyChooser = await ui.screen.findByRole("complementary", { name: "Choose a topic" });
-  assert.equal(historyChooser.querySelectorAll(".topic-choice-list button").length, 3, "choices are the returned topics, not all children of the request origin");
+  const historyGraph = await choiceGraph();
+  assert.equal(historyGraph.querySelectorAll("button[data-graph-choice]").length, 3, "choices are the returned topics, not all children of the request origin");
   for (const city of cities.slice(0, 3)) {
-    const option = ui.within(historyChooser).getByRole("button", { name: `Explore ${city} history` });
-    assert.ok(ui.within(option).getByText(`From ${city}`));
+    assert.ok(ui.within(historyGraph).getByRole("button", { name: `Enter ${city} history` }));
   }
   const histories = await currentSnapshot();
   assert.equal(Object.keys(histories.conversation.explorations).length, 8);
@@ -635,7 +652,7 @@ test("a city batch creates four explicit choices and later histories retain thei
     await ui.waitFor(() => assert.equal(document.querySelector<HTMLElement>(`[data-node-id="${cityIds[city]}"]`)!.style.visibility, "visible", "a history's city ancestor remains visible in the batch overview"));
   }
   await ui.waitFor(() => assert.equal(document.querySelector<HTMLElement>(`[data-node-id="${cityIds.Tangier}"]`)!.style.visibility, "hidden", "unaffected topics are not substituted for the explicit result choices"));
-  await user.click(ui.within(historyChooser).getByRole("button", { name: "Explore Marrakesh history" }));
+  await user.click(ui.within(historyGraph).getByRole("button", { name: "Enter Marrakesh history" }));
   await user.click(await ui.screen.findByRole("button", { name: "Back to Marrakesh ↗" }));
   assert.equal(activeTopic(), "Go to Marrakesh");
   assert.equal(composer.value, "Keep this city draft");
@@ -660,12 +677,12 @@ test("a late batch stays in the background and opens only its affected topics wi
   await ui.screen.findByText("Your answer is ready in 2 topics.", { exact: false });
   assert.equal(activeTopic(), "Go to Weather records");
   assert.equal(composer.value, "My next weather question");
-  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
   await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
-  const chooser = ui.screen.getByRole("complementary", { name: "Choose a topic" });
-  assert.equal(chooser.querySelectorAll(".topic-choice-list button").length, 2);
-  assert.ok(ui.within(chooser).getByRole("button", { name: "Explore Roof design" }));
-  assert.ok(ui.within(chooser).getByRole("button", { name: "Explore Site access" }));
+  const graph = await choiceGraph();
+  assert.equal(graph.querySelectorAll("button[data-graph-choice]").length, 2);
+  assert.ok(ui.within(graph).getByRole("button", { name: "Enter Roof design" }));
+  assert.ok(ui.within(graph).getByRole("button", { name: "Enter Site access" }));
   await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
   assert.equal(composer.value, "My next weather question");
   assert.equal(requests.length, 1);
@@ -693,7 +710,7 @@ test("an unopened batch cannot redirect a later failed question away from its re
   await ui.screen.findByText("The question in another topic needs a retry.", { exact: false });
   await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
   assert.equal(activeTopic(), "Go to Weather records");
-  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null, "the old batch must not replace the failed question's reading view");
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null, "the old batch must not replace the failed question's reading view");
   assert.ok(await ui.screen.findByRole("button", { name: "Retry" }));
   assert.ok(ui.screen.getByText("Explain the rainfall records"));
   await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
@@ -718,7 +735,7 @@ test("a malformed batch leaves every original topic intact and retains a retryab
   await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Organize two subjects{Enter}");
   await ui.screen.findByRole("button", { name: "Retry" });
   assert.equal(ui.screen.queryByRole("button", { name: "Go to Valid first topic" }), null);
-  assert.equal(ui.screen.queryByRole("complementary", { name: "Choose a topic" }), null);
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
   const saved = await currentSnapshot("ui-observatory");
   assert.deepEqual(saved.conversation, original, "invalid batches cannot update the overview or create a subset of the proposed nodes");
   assert.equal(saved.view.pending?.question, "Organize two subjects");
@@ -885,7 +902,7 @@ test("a crowded conversation keeps keyboard navigation, long-answer outlines, an
   await ui.waitFor(() => assert.equal(document.querySelector(".selection-chip p")?.textContent, quote));
   const draft = "Help me compare this measurement";
   await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), draft);
-  await user.click(ui.screen.getByRole("button", { name: /^Overview/ }));
+  await user.click(ui.screen.getByRole("button", { name: "Conversation map" }));
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
   await user.click(ui.screen.getByRole("button", { name: "Return to previous view" }));
   assert.equal(activeTopic(), "Go to Field notes 32");
@@ -1481,20 +1498,20 @@ test("navigation regression: visiting a source does not attach it to the next qu
   assert.equal(requests[0].selection, null);
 });
 
-test("navigation regression: focused reading caps nearby topics while explicit pairs and overview retain detail", async () => {
+test("navigation regression: focused reading caps nearby topics, pairs retain readers, and maps stay compact", async () => {
   const { default: SpatialWorld } = await import("../src/components/SpatialWorld");
   const nodes = [
     { id: "reader", position: { x: 0, y: 0, z: 0 } },
     { id: "neighbor", position: { x: -350, y: 0, z: 0 } },
   ];
   const view = focusView(nodes[0].position, 1100, 780);
-  const scene = (activeId?: string, fullDetailIds?: string[]) => <SpatialWorld nodes={nodes} links={[]} view={view} reducedMotion activeId={activeId} fullDetailIds={fullDetailIds}>
+  const scene = (activeId?: string, fullDetailIds?: string[], compact = false) => <SpatialWorld nodes={nodes} links={[]} view={view} reducedMotion activeId={activeId} fullDetailIds={fullDetailIds} compact={compact}>
     {(node) => <p>{node.id}</p>}
   </SpatialWorld>;
   const rendered = ui.render(scene());
   const neighbor = document.querySelector<HTMLElement>('[data-node-id="neighbor"]')!;
   const reader = document.querySelector<HTMLElement>('[data-node-id="reader"]')!;
-  await ui.waitFor(() => assert.equal(neighbor.dataset.detail, "full", "overview still uses projected scale"));
+  await ui.waitFor(() => assert.equal(neighbor.dataset.detail, "full", "unconstrained projection uses scale"));
   assert.equal(neighbor.style.visibility, "visible", "the regression needs a nearby card in view");
 
   rendered.rerender(scene("reader"));
@@ -1503,4 +1520,86 @@ test("navigation regression: focused reading caps nearby topics while explicit p
 
   rendered.rerender(scene("reader", ["reader", "neighbor"]));
   await ui.waitFor(() => assert.equal(neighbor.dataset.detail, "full", "explicit source pairing must retain both readers"));
+  rendered.rerender(scene(undefined, undefined, true));
+  await ui.waitFor(() => assert.equal(neighbor.dataset.detail, "summary", "maps cannot contain accidentally expanded readers"));
+  assert.equal(reader.dataset.detail, "summary");
 });
+
+test("space navigation cancels when its gesture crosses into a topic", async () => {
+  await open(fixture());
+  const reader = readerFor("observatory");
+  wheelSpace(40);
+  assert.equal(ui.fireEvent.wheel(reader, { deltaY: 50 }), true);
+  wheelSpace(500);
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  await quietWheel(); wheelSpace(100);
+  assert.equal((await choiceGraph()).dataset.choiceParent, "observatory");
+});
+
+test("one child opens on a fresh space gesture and momentum cannot cross another level", async () => {
+  const initial = fixture();
+  delete initial.conversation.explorations.equipment;
+  await open(initial);
+  wheelSpace(100_000);
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
+  wheelSpace(-100_000);
+  assert.equal(activeTopic(), "Go to Weather records");
+  await quietWheel(); wheelSpace(-120);
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Plan an observatory"));
+});
+
+test("scrolling into a compact focused topic restores reading before exploring children", async () => {
+  const initial = fixture();
+  initial.view.positions = { observatory: { x: 0, y: 0, z: 0 } };
+  initial.view.view = { x: 0, y: 0, z: 3000 };
+  await open(initial);
+  const node = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
+  await ui.waitFor(() => assert.notEqual(node.dataset.detail, "full"));
+  wheelSpace(120);
+  await ui.waitFor(() => assert.equal(node.dataset.detail, "full"));
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
+  await quietWheel(); wheelSpace(120);
+  await choiceGraph();
+});
+
+test("scrolling out to a parent opens its reader even when its saved camera was zoomed out", async () => {
+  const initial = fixture("weather");
+  initial.view.places.observatory = { view: { x: 0, y: 0, z: 9000 }, draft: "Keep the parent question", selection: null, scrollTop: 315 };
+  await open(initial);
+  wheelSpace(-120);
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Plan an observatory"));
+  const node = document.querySelector<HTMLElement>('[data-node-id="observatory"]')!;
+  await ui.waitFor(() => assert.equal(node.dataset.detail, "full"));
+  assert.equal(readerFor("observatory").scrollTop, 315);
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Keep the parent question");
+  const saved = await currentSnapshot("ui-observatory");
+  const parent = layoutSpace(initial.conversation).find((item) => item.id === "observatory")!.position;
+  assert.deepEqual(saved.view.view, focusView(parent, 1100, 780));
+});
+
+for (const outcome of ["success", "error", "cancel"] as const) {
+  test(`global thinking remains while navigating and clears on ${outcome}`, async () => {
+    let resolveAnswer!: (value: Response) => void;
+    answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+    const user = await open(fixture());
+    await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain the site requirements{Enter}");
+    const status = document.querySelector<HTMLElement>(".generation-status")!;
+    assert.equal(ui.within(status).getByRole("status").textContent, "Thinking…");
+    await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+    assert.ok(status.isConnected);
+    assert.ok(ui.screen.getByRole("button", { name: "Stop generating" }));
+    if (outcome === "cancel") {
+      await user.click(ui.screen.getByRole("button", { name: "Stop generating" }));
+      await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });
+    } else {
+      await ui.act(async () => { resolveAnswer(outcome === "success"
+        ? Response.json(result(requests[0]))
+        : Response.json({ error: "Temporary model failure" }, { status: 503 })); });
+    }
+    await ui.waitFor(() => assert.equal(document.querySelector(".generation-status"), null));
+    assert.equal(activeTopic(), "Go to Weather records");
+    assert.equal(requests.length, 1);
+    if (outcome === "cancel") assert.equal(document.querySelector('[data-topic^="exploration-"]'), null, "a stopped answer cannot arrive later");
+  });
+}

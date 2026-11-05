@@ -16,6 +16,8 @@ import type { AnnotationRequest, AnswerRequest, AnswerResult, ModelStatus } from
 import { normalizeText, messageText } from "@/lib/markdown";
 import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, applyPositionOverrides, annotationView, fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
 import type { SpatialPoint } from "@/lib/spatial";
+import { advanceSpatialScroll } from "@/lib/spatial-scroll";
+import type { SpatialScrollState } from "@/lib/spatial-scroll";
 
 type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number; annotations?: AnnotationRequest[] };
 type Pointer = { x: number; y: number };
@@ -102,7 +104,7 @@ export default function ConversationSpace() {
   const [library, setLibrary] = useState<{ id: string; title: string; savedAt: string }[]>([]);
   const [scrollRevision, setScrollRevision] = useState(0);
   const stage = useRef<HTMLDivElement>(null);
-  const choicePanel = useRef<HTMLElement>(null);
+  const spatialScroll = useRef<SpatialScrollState | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const saved = useRef<Record<string, SavedPlace>>({});
@@ -372,10 +374,8 @@ export default function ConversationSpace() {
 
   const resumeTopic = useCallback((id: string) => {
     const leavingChoice = Boolean(choiceNow.current);
-    const previousChoiceFocus = choicePanel.current?.contains(document.activeElement) ? document.activeElement : null;
-    const camera = saved.current[id]?.view;
+    const previousChoiceFocus = stage.current?.contains(document.activeElement) ? document.activeElement : null;
     focus(id, leavingChoice && id !== choiceNow.current);
-    if (camera && !space.explorations[id]?.source) setCamera(camera);
     if (leavingChoice) {
       const generation = navigation.current;
       const deadline = performance.now() + 1800;
@@ -395,8 +395,27 @@ export default function ConversationSpace() {
   }, [focus, space]);
 
   useEffect(() => {
-    if (choiceParentId) choicePanel.current?.querySelector<HTMLButtonElement>(".topic-choice-list button")?.focus({ preventScroll: true });
-  }, [choiceParentId]);
+    if (!choiceParentId) return;
+    // Wait for the existing arrival animation; never take focus from a draft.
+    const previousFocus = document.activeElement;
+    if (previousFocus !== document.body && !stage.current?.contains(previousFocus)) return;
+    const deadline = performance.now() + 1800;
+    const generation = navigation.current;
+    let frame: number;
+    const focusChoice = () => {
+      if (navigation.current !== generation || performance.now() > deadline) return;
+      if (document.activeElement !== previousFocus && document.activeElement !== document.body) return;
+      const button = Array.from(stage.current?.querySelectorAll<HTMLButtonElement>("button[data-graph-choice]") ?? []).find((candidate) => {
+        const node = candidate.closest<HTMLElement>("[data-node-id]");
+        return node?.style.visibility === "visible" && !node.inert;
+      });
+      const node = button?.closest<HTMLElement>("[data-node-id]");
+      if (button && node?.style.visibility === "visible" && !node.inert) button.focus({ preventScroll: true });
+      else frame = requestAnimationFrame(focusChoice);
+    };
+    frame = requestAnimationFrame(focusChoice);
+    return () => cancelAnimationFrame(frame);
+  }, [choiceParentId, choiceTopicIds]);
 
   const exploreChildren = useCallback((id: string) => {
     if (switchingNow.current || !space.explorations[id]) return;
@@ -433,26 +452,46 @@ export default function ConversationSpace() {
         return;
       }
       markInteraction();
-      // A wheel always reads. Reaching an edge never changes topic or camera.
-      // Native readers and the path chooser keep their browser scrolling.
-      const nativeReader = target.closest<HTMLDivElement>('.world-node[data-detail="full"] .topic-reading');
-      if (nativeReader || target.closest(".topic-choice-list")) return;
+      const topic = target.closest<HTMLElement>("[data-topic]");
+      const gesture = advanceSpatialScroll(spatialScroll.current, {
+        time: now, delta, owner: topic ? "topic" : "space",
+        scope: `${space.id}:${choiceNow.current ? `choice:${choiceNow.current}` : overview ? "overview" : activeNow.current}`,
+      });
+      spatialScroll.current = gesture.state;
+      if (topic) {
+        // The entire card owns reading, including its header and padding.
+        const node = topic.closest<HTMLElement>("[data-node-id]");
+        if (node?.dataset.detail === "full" && target.closest(".topic-reading")) return;
+        if (event.cancelable) event.preventDefault();
+        const reader = readers.current.get(topic.dataset.topic!);
+        if (reader && node?.dataset.detail === "full") {
+          reader.scrollTop = Math.max(0, Math.min(reader.scrollHeight - reader.clientHeight, reader.scrollTop + delta));
+          if (saved.current[topic.dataset.topic!]) saved.current[topic.dataset.topic!].scrollTop = reader.scrollTop;
+          remember();
+        }
+        return;
+      }
       if (event.cancelable) event.preventDefault();
-      if (overview || choiceNow.current) return;
-      const reader = readers.current.get(activeNow.current);
-      const node = reader?.closest<HTMLElement>("[data-node-id]");
-      if (!reader || node?.dataset.detail !== "full" || node.style.visibility === "hidden") return;
-      const max = Math.max(0, reader.scrollHeight - reader.clientHeight);
-      reader.scrollTop = Math.max(0, Math.min(max, reader.scrollTop + delta));
-      remember();
-      if (scrollTimer.current) clearTimeout(scrollTimer.current);
-      scrollTimer.current = setTimeout(() => setScrollRevision((value) => value + 1), 250);
+      if (!gesture.direction) return;
+      if (gesture.direction < 0) {
+        if (choiceNow.current) { resumeTopic(choiceNow.current); return; }
+        if (overview) return;
+        const parent = space.explorations[activeNow.current]?.parentId;
+        if (parent) resumeTopic(parent);
+        else showOverview();
+        return;
+      }
+      if (choiceNow.current) { setScrollHint("Choose a topic in the graph. Scroll up to return."); return; }
+      const node = readers.current.get(activeNow.current)?.closest<HTMLElement>("[data-node-id]");
+      if (overview || node?.dataset.detail !== "full" || node.style.visibility !== "visible") {
+        focus(activeNow.current);
+        return;
+      }
+      exploreChildren(activeNow.current);
     };
-    const chooser = choicePanel.current;
     element.addEventListener("wheel", wheel, { passive: false });
-    chooser?.addEventListener("wheel", wheel, { passive: false });
-    return () => { element.removeEventListener("wheel", wheel); chooser?.removeEventListener("wheel", wheel); };
-  }, [space, activate, pointFor, started, zoom, overview, choiceParentId, markInteraction, remember, resumeTopic, focus, showOverview, exploreChildren, annotationFrame]);
+    return () => element.removeEventListener("wheel", wheel);
+  }, [space, pointFor, started, zoom, overview, choiceParentId, markInteraction, remember, resumeTopic, focus, showOverview, exploreChildren]);
 
   useEffect(() => {
     const keydown = (event: globalThis.KeyboardEvent) => {
@@ -467,6 +506,17 @@ export default function ConversationSpace() {
         return;
       }
       if (["TEXTAREA", "INPUT", "SELECT"].includes(target.tagName) || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (choiceNow.current && target.closest("button[data-graph-choice]") && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const buttons = Array.from(stage.current?.querySelectorAll<HTMLButtonElement>("button[data-graph-choice]") ?? []).filter((candidate) => {
+          const node = candidate.closest<HTMLElement>("[data-node-id]");
+          return node?.style.visibility === "visible" && !node.inert;
+        });
+        const index = buttons.indexOf(target.closest<HTMLButtonElement>("button[data-graph-choice]")!);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length;
+        buttons[next]?.focus({ preventScroll: true });
+        return;
+      }
       if (target.closest(".topic-reading") && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) markInteraction();
       if (event.key === "/") { event.preventDefault(); composer.current?.focus(); }
       if (!started) return;
@@ -483,7 +533,7 @@ export default function ConversationSpace() {
     const target = event.target as HTMLElement;
     const moveId = target.closest<HTMLElement>("[data-move-topic]")?.dataset.moveTopic;
     if (event.button !== 0) return;
-    if (!moveId && target.closest(".topic-reading")) { markInteraction(); return; }
+    if (!moveId && target.closest("[data-topic]")) { markInteraction(); return; }
     if (!moveId && target.closest("button, textarea")) return;
     markInteraction();
     if (!pointers.current.size) setCamera({ ...renderedView.current });
@@ -844,12 +894,12 @@ export default function ConversationSpace() {
       <div className="top-actions">
         <button onClick={() => void openFresh()} disabled={!ready || switching || Boolean(pending && !pending.error)}>New chat</button>
         <button onClick={() => { setSavedChats(!savedChats); setMenu(false); }} disabled={!ready || switching} aria-expanded={savedChats}>Saved chats</button>
-        {started && <button onClick={showOverview} aria-label="Overview" title="Overview · 0">Map</button>}
+        {started && <button onClick={showOverview} aria-label="Conversation map" title="Conversation map · 0">Conversation map</button>}
         <button onClick={() => { setMenu(!menu); setSavedChats(false); }} aria-label="Conversation menu" aria-expanded={menu}>⋯</button>
       </div>
     </header>
     {started && <nav className="breadcrumbs" aria-label="Conversation path"><button onClick={back} aria-label="Return to previous view" disabled={!overview && !choiceParentId && !history.current.length}>← Back</button>{path.map((item, index) => <span key={item.id}>{index > 0 && <i>/</i>}<button onClick={() => focus(item.id)} aria-current={item.id === activeId ? "page" : undefined}>{item.title}</button></span>)}</nav>}
-    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll to read, even over empty space. Reading never changes your topic. Follow a linked topic or choose Explore at the end of an answer.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, and write a question. Select another passage to queue the first annotation. Send them together for separate linked replies.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Back returns to your previous view. The breadcrumb names take you up the topic hierarchy. Map shows the whole conversation. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 opens the map.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
+    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll inside a topic to read. Scroll in empty space down to explore details, or up toward the parent and overview. When several paths appear, choose a title in the graph. Reading inside a topic never changes your place in the graph.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, and write a question. Select another passage to queue the first annotation. Send them together for separate linked replies.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Back returns to your previous view. The breadcrumb names take you up the topic hierarchy. Conversation map shows the whole conversation. Hover or focus a dot to preview its title. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 opens the conversation map.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
     {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
       <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
       <p className="panel-explainer">Saved in this browser.</p>
@@ -871,9 +921,9 @@ export default function ConversationSpace() {
       <p className="menu-caption">Include in next question · up to 8</p><div className="context-picker">{Object.values(space.explorations).filter((item) => item.id !== activeId).map((item) => <label key={item.id}><input type="checkbox" checked={includeIds.includes(item.id)} disabled={includeIds.length >= 8 && !includeIds.includes(item.id)} onChange={(event) => { markInteraction(); setIncludeIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id)); }} />{item.title}</label>)}</div>
     </aside>}
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
-    <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
-      <SpatialWorld nodes={started ? presentedNodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds ?? annotationFrame?.visibleIds} fullDetailIds={annotationFrame?.visibleIds}>
-        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={(id) => focus(id, true)} onExplore={() => exploreChildren(node.id)} onSource={openSource} readingRef={(element) => {
+    <div ref={stage} data-choice-parent={choiceParentId ?? undefined} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
+      <SpatialWorld nodes={started ? presentedNodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds ?? annotationFrame?.visibleIds} fullDetailIds={annotationFrame?.visibleIds} compact={overview || Boolean(choiceParentId)}>
+        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} graphChoice={Boolean(choiceParentId && choices.some((item) => item.id === node.id))} onFocus={() => choiceNow.current ? resumeTopic(node.id) : focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={(id) => focus(id, true)} onExplore={() => exploreChildren(node.id)} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
         }} onScroll={(top) => {
@@ -886,12 +936,7 @@ export default function ConversationSpace() {
       {!started && <div className="welcome"><h1>What’s on your mind?</h1></div>}
     </div>
     {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { chooseSection(selectionPreview.source); window.getSelection()?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
-    {choiceParentId && <aside ref={choicePanel} className="topic-choice" aria-label="Choose a topic">
-      <div className="topic-choice-heading"><h2>Choose a topic</h2><button className="topic-choice-return" onClick={() => resumeTopic(choiceParentId)}>Return to {space.explorations[choiceParentId].title}</button></div>
-      <p>{choiceTopicIds ? "Your answer, organized by topic" : `Explore ${space.explorations[choiceParentId].title}`}</p>
-      <div className="topic-choice-list">{choices.map((item) => <button key={item.id} onClick={() => resumeTopic(item.id)} aria-label={`Explore ${item.title}`}><strong>{item.title}</strong>{choiceTopicIds && item.parentId !== choiceParentId && item.parentId && <small>From {space.explorations[item.parentId].title}</small>}<span>{item.summary}</span></button>)}</div>
-    </aside>}
-    {scrollHint && <p className="scroll-boundary-hint" role="status">{scrollHint}</p>}
+    {(scrollHint || choiceParentId) && <p className="scroll-boundary-hint" role="status">{scrollHint || `${choices.length} topics · Choose a title to explore · Scroll up to return`}</p>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
     {started && <SpaceMap nodes={presentedNodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
@@ -908,12 +953,13 @@ export default function ConversationSpace() {
       </section>}
       {selection && <div className="selection-chip"><span>About</span><p>{selectionLabel || "Selected section"}</p><button onClick={() => { markInteraction(); setSelection(null); }} aria-label="Clear selected passage">×</button></div>}
       {selection && draft.trim() && <button className="queue-annotation" onClick={() => { markInteraction(); if (queueAnnotation()) setNotice("Select another passage, or send your annotation now."); }}>Add another annotation +</button>}
+      {pending && !pending.error && <div className="generation-status"><span role="status" aria-live="polite">Thinking…</span><button type="button" onClick={cancel} aria-label="Stop generating">Stop</button></div>}
       {started && <div className="composer-context"><span>{active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
       <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={draft} onChange={(event) => { markInteraction(); setDraft(event.target.value); }} onKeyDown={composerKeydown} aria-label="Your question" placeholder={selection ? "Ask about this passage" : annotations.length ? "Optional instructions for these annotations" : "Ask anything"} rows={1} maxLength={8000} disabled={!ready || switching} />{draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
     </div>
     {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onSubmit={(event) => { event.preventDefault(); setShowAccess(false); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => setShowAccess(false)} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}
     {switching && <div className="workspace-transition" role="status">Opening conversation…</div>}
-    <footer className="navigation-hint"><span>{started ? "SCROLL TO READ · FOLLOW A TOPIC TO EXPLORE · PINCH TO ZOOM" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
+    <footer className="navigation-hint"><span>{started ? "INSIDE: SCROLL TO READ · SPACE: SCROLL TO EXPLORE · PINCH TO ZOOM" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
     <span className="sr-only" role="status" aria-live="polite">{started ? `${active.title}, depth ${getDepth(space, active.id)}${overview ? ", overview" : ""}` : "Ready for your question"}</span>
   </main>;
 }

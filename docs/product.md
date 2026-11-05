@@ -1,6 +1,6 @@
 # Product brief
 
-Working design · 2026-11-04
+Working design · 2026-11-05
 
 Metaphore lets you explore an idea within an AI answer and return without losing
 your place. Depth represents detail. Relationships come from sources and explicit
@@ -11,7 +11,8 @@ connections, independently of where topics appear on screen.
 1. Enter an empty black space and type beside the orb. Receive a sectioned, live
    answer from a Meta model. No prewritten job conversation opens by default.
    On submission the input clears, and the question appears in a pending card.
-   You can write the next draft while waiting.
+   The orb pulses with **Thinking…** and **Stop**, visible even if you visit
+   another topic. You can write the next draft while waiting.
 2. Select a passage and click **Ask about this** beside the highlight. The quote
    attaches above the question input, which receives focus without losing your
    draft. Highlighting alone does not attach it or submit anything. You can also
@@ -45,18 +46,24 @@ connections, independently of where topics appear on screen.
    files to carry conversations between browsers. Older saved samples remain
    available in the library but are not restored automatically at startup.
 
-Scroll inside an answer or over empty space to read the active topic. Reaching
-either edge never changes topic or camera. Follow a topic link or use
-**Explore topics** at the answer's end: one child opens directly; several children
-appear together with readable titles to choose from. Scrolling the chooser reads
-its choices without picking one.
+Scroll inside a topic, including its header or padding, to read that topic.
+Reaching its edge never leaves it. Scroll in empty space down to explore details,
+or up to its parent; upward from the root opens the overview. One gesture moves
+at most one level, and reading momentum cannot turn into navigation when the
+pointer leaves a card.
+
+Downward exploration opens one child directly. Several children appear as titles
+in the graph: choose a title to enter, or scroll up to return. Scrolling down again
+does not choose a path for you. Arrow keys move between choices and Enter opens
+one. A zoomed-out topic first returns to reading before a further downward gesture
+explores its children. Downward scrolling from the overview resumes the active topic.
 
 **Back** retraces visited views and restores reading position and draft. The
 breadcrumb follows ancestry, while the rail switches to another topic and
-**Map** shows the whole conversation. The map stays open until you choose a
-topic or return. `Esc` closes an overlay first; in a draft it leaves typing mode;
-otherwise it performs Back. A source link reveals its passage without attaching
-it to your next question. Use selection or **Ask about** to attach a passage.
+**Conversation map** shows the whole conversation. `Esc` closes an overlay first;
+in a draft it leaves typing mode; otherwise it performs Back. A source link
+reveals its passage without attaching it to your next question. Use selection or
+**Ask about** to attach a passage.
 
 Ordinary topic navigation shows one reader. Following a passage reply can keep
 its source alongside it when there is room. Returning preserves a passage
@@ -69,10 +76,11 @@ still control visual zoom; `0` shows the overview. The left rail and mini-map
 provide direct jumps when you want a different path.
 
 On touchscreens, swipe inside the answer to read and use **Explore topics**,
-the source link, or the chooser's return action to move between topics.
+topic titles, source links, or **Back** to move between topics.
 
-The mini-map shows the conversation's spatial shape and highlights the active
-topic. Its diamond marks the camera destination. The space stays monochrome,
+**Conversation map** shows the conversation's spatial shape and highlights the
+active topic. Hover or keyboard-focus a dot to preview its title, then select it
+to jump there. Its diamond marks the camera destination. The space stays monochrome,
 with a softly colored input orb, a star cursor, and a slowly drifting starfield.
 Text keeps its normal selection cursor. Reduced motion disables the ambient
 movement and the arrival journey.
@@ -114,10 +122,12 @@ synthesis edges. Replay and `.ingx` round trips passed. These examples test gene
 behavior; they are not hardcoded rules about cities or histories.
 
 Automated tests cover section partitioning, atomic multi-topic application,
-synthesis references, selection, navigation, and recovery. Native Safari checks
+synthesis references, selection, navigation, and recovery. Earlier native Safari checks
 on the local production build verified the imported graph's four-city layout,
 synthesis and source links, exact reading-position restoration, the section ask
-action and composer focus, the topic chooser, and the compact final overview.
+action and composer focus, the former topic chooser, and the compact final overview.
+The current direct graph choice and pointer-owned scrolling update requires its
+own verification; see the [experience review](experience-review.md).
 Physical trackpad/touch gestures, device performance, live arrival motion, and
 public deployment remain unverified.
 

@@ -25,6 +25,7 @@ type SpatialWorldProps = {
   activeId?: string;
   visibleIds?: string[];
   fullDetailIds?: string[];
+  compact?: boolean;
   view: WorldPoint;
   reducedMotion: boolean;
   transition?: SpatialTransition | null;
@@ -296,7 +297,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
       frame = null;
       if (disposed || document.visibilityState === "hidden") return;
 
-      const { nodes, links, view, reducedMotion, activeId, visibleIds, fullDetailIds, transition } = latest.current;
+      const { nodes, links, view, reducedMotion, activeId, visibleIds, fullDetailIds, compact, transition } = latest.current;
       const visibleNodeIds = visibleIds ? new Set(visibleIds) : null;
       const fullDetailNodeIds = new Set(fullDetailIds ?? []);
       const requested = finitePoint(view, DEFAULT_VIEW);
@@ -424,7 +425,7 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         const mobileFullThreshold = Math.max(0.1, (width - 32) / CARD_WIDTH * 0.9);
         const scaledDetail = fullDetailNodeIds.has(node.id) || scale >= mobileFullThreshold ? "full" : detailForScale(scale);
         // Only the reader and explicitly paired sources expand during focus.
-        const detail = activeId !== undefined && node.id !== activeId && !fullDetailNodeIds.has(node.id) && scaledDetail === "full" ? "summary" : scaledDetail;
+        const detail = compact && scaledDetail === "full" ? "summary" : activeId !== undefined && node.id !== activeId && !fullDetailNodeIds.has(node.id) && scaledDetail === "full" ? "summary" : scaledDetail;
         element.dataset.detail = detail;
         // Keep projectable endpoints so links can cross the clipped viewport
         // even when an endpoint's card is completely offscreen.

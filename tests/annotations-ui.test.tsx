@@ -277,8 +277,9 @@ test("selecting another passage queues the first question and sends two exact an
     { source: { explorationId: "weather", messageId: "weather-answer-two", sectionId: "rain-notes", quote: "Check drainage and record rainfall." }, question: "How long should I record the rain?" },
   ]);
   assert.equal(new Set(request.annotations!.map((item) => item.id)).size, 2);
-  await ui.waitFor(() => assert.ok(ui.screen.getByRole("button", { name: "Explore Annotation reply 1" })));
-  assert.ok(ui.screen.getByRole("button", { name: "Explore Annotation reply 2" }));
+  await ui.waitFor(() => assert.ok(document.querySelector(".world-stage[data-choice-parent]")));
+  await ui.waitFor(() => assert.ok(ui.screen.getByRole("button", { name: "Enter Annotation reply 1" })));
+  assert.ok(ui.screen.getByRole("button", { name: "Enter Annotation reply 2" }));
   const saved = await currentSnapshot("ui-observatory");
   const replies = Object.values(saved.conversation.explorations).filter((item) => item.title.startsWith("Annotation reply"));
   assert.equal(replies.length, 2);
@@ -312,7 +313,8 @@ test("choosing a reused annotation topic reveals its new answer once and later p
   selectPassage(paragraph("choose-site"), "the equipment you need");
   await user.type(input(), "What equipment should I compare next?");
   await user.click(ui.screen.getByRole("button", { name: "Send 2 annotations ↑" }));
-  await ui.waitFor(() => assert.ok(ui.screen.getByRole("button", { name: "Explore Weather records" })));
+  await ui.waitFor(() => assert.ok(document.querySelector(".world-stage[data-choice-parent]")));
+  await ui.waitFor(() => assert.ok(ui.screen.getByRole("button", { name: "Enter Weather records" })));
   assert.equal(source.scrollTop, 240);
   const request = requests[0];
   for (const [index, id, offset] of [[0, "weather", 900], [1, "equipment", 820]] as const) {
@@ -321,8 +323,8 @@ test("choosing a reused annotation topic reveals its new answer once and later p
     assert.ok(message, "the reused topic contains the exact new assistant message after its old answer");
     message.getBoundingClientRect = () => new dom.window.DOMRect(0, offset - reader.scrollTop, 600, 100);
   }
-  await user.click(ui.screen.getByRole("button", { name: "Explore Weather records" }));
-  await ui.waitFor(() => assert.ok(readerFor("weather").scrollTop > 700, "the chooser must reveal the new answer rather than restore the old 110px reading position"));
+  await user.click(ui.screen.getByRole("button", { name: "Enter Weather records" }));
+  await ui.waitFor(() => assert.ok(readerFor("weather").scrollTop > 700, "the graph choice must reveal the new answer rather than restore the old 110px reading position"));
   assert.equal(input().value, "Saved weather draft");
   assert.equal(source.scrollTop, 240, "revealing the reply never moves its source reader");
   readerFor("weather").scrollTop = 470; ui.fireEvent.scroll(readerFor("weather"));

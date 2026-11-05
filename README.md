@@ -13,10 +13,11 @@ subjects, reuse existing topics, or combine ideas into a new synthesis topic.
 Synthesis links back to its inputs and keeps the originals. Placement is a model
 decision; it is not guaranteed to match your preferred grouping.
 
-Scroll to read. Follow a topic link or choose **Explore topics** to go deeper;
-**Back** returns to your previous reading place. Drag topics to arrange them;
-pinch or use the zoom controls to see
-the wider space. Chats save in your browser. Export `.ingx` to carry the
+Scroll inside a topic to read; scroll in empty space to move toward details or
+back toward the overview. Choose a title when the conversation splits.
+**Back** restores your previous reading place. **Conversation map** shows the
+whole shape; hover a dot to see its title and click to jump. Drag topics to arrange
+them, or pinch to zoom. Chats save in your browser. Export `.ingx` to carry the
 conversation, connections, and view state together.
 
 [Demo](docs/demo.md) · [Architecture](docs/architecture.md) ·

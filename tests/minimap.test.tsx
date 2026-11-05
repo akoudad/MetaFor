@@ -45,7 +45,7 @@ test("the map supports click, roving keyboard navigation, and an overview action
   assert.equal(document.activeElement, overview);
   ui.fireEvent.keyDown(overview, { key: " " });
   ui.fireEvent.click(weather);
-  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Show all topics" }));
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Show Conversation map" }));
   assert.deepEqual(navigated, ["topic-2", "topic-0", "topic-1"]);
   assert.equal(overviews, 1);
 });
@@ -62,4 +62,42 @@ test("a large map has one node tab stop and updates when topics move or disappea
   assert.equal(document.querySelectorAll(".space-map-node").length, 0);
   assert.ok(ui.screen.getByText("No topics yet"));
   assert.equal(document.querySelector(".space-map-camera"), null);
+});
+
+test("map node titles appear on hover and keyboard focus without navigating", () => {
+  const nodes = [
+    { id: "source", position: { x: 0, y: 0, z: 0 } },
+    { id: "detail", position: { x: 880, y: -1280, z: -1050 } },
+  ];
+  const navigated: string[] = [];
+  const props = { nodes, links: [], activeId: "source", view: { x: 0, y: 0, z: 900 }, labels: { source: "Original research question", detail: "A detailed exploration with a longer descriptive title" }, onNavigate: (id: string) => navigated.push(id), onOverview() {} };
+  const mounted = ui.render(<SpaceMap {...props} />);
+  assert.ok(ui.screen.getByText("Conversation map"));
+  assert.ok(ui.screen.getByRole("group", { name: "Conversation map topics" }));
+  const source = ui.screen.getByRole("button", { name: "Focus topic: Original research question" });
+  const detail = ui.screen.getByRole("button", { name: `Focus topic: ${props.labels.detail}` });
+  assert.equal(ui.screen.queryByRole("tooltip"), null);
+  ui.fireEvent.pointerEnter(source);
+  const hoverTip = ui.screen.getByRole("tooltip");
+  assert.equal(hoverTip.textContent, props.labels.source);
+  assert.equal(source.getAttribute("aria-describedby"), hoverTip.id);
+  assert.equal(hoverTip.style.left, "4px");
+  assert.equal(hoverTip.style.right, "4px");
+  assert.deepEqual(navigated, []);
+  ui.fireEvent.pointerLeave(source);
+  assert.equal(ui.screen.queryByRole("tooltip"), null);
+  ui.act(() => source.focus());
+  assert.equal(ui.screen.getByRole("tooltip").textContent, props.labels.source);
+  ui.fireEvent.pointerEnter(source);
+  ui.fireEvent.keyDown(source, { key: "ArrowDown" });
+  assert.equal(document.activeElement, detail);
+  assert.equal(ui.screen.getByRole("tooltip").textContent, props.labels.detail);
+  assert.deepEqual(navigated, []);
+  ui.fireEvent.keyDown(detail, { key: "Escape" });
+  assert.equal(ui.screen.queryByRole("tooltip"), null);
+  ui.fireEvent.keyDown(detail, { key: "Enter" });
+  assert.deepEqual(navigated, ["detail"]);
+  ui.fireEvent.pointerEnter(source);
+  mounted.rerender(<SpaceMap {...props} nodes={[]} />);
+  assert.equal(ui.screen.queryByRole("tooltip"), null, "removed nodes cannot leave stale tooltip titles");
 });

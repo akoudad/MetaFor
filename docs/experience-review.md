@@ -4,7 +4,7 @@
 component regressions, and live model calls. It is not a usability score or a
 claim that every device has been tested.
 
-## Before and after
+## Previous pass: before and after
 
 | Task | Observed baseline | Revised behavior and evidence |
 | --- | --- | --- |
@@ -32,8 +32,9 @@ successful checkpoints rather than paying for the same calls again.
 
 For the navigation walkthrough: use **In this topic** to jump to a middle
 section, visit Retry delivery and Atomic acknowledgement, then press **Back**
-twice. Repeated scrolling at either edge should leave you in the current topic.
-Use **Map** to inspect the conversation; choose a topic to resume reading.
+twice. Repeated scrolling inside the reader at either edge should leave you in
+the current topic. Use **Conversation map** to inspect the conversation; choose a
+topic to resume reading.
 
 ## Scope and limits
 
@@ -70,7 +71,38 @@ Safari's developer console was unavailable through the connected native controls
 No claim of a clean browser console is made. Build, TypeScript, component tests,
 and server logs are separate evidence, not substitutes for console inspection.
 
-Final checks: **185 tests pass**, `npm run typecheck` passes, and
-`npm run build` passes. The final production build was reloaded and inspected in
+Previous-pass checks: **185 tests passed**, `npm run typecheck` passed, and
+`npm run build` passed. That production build was reloaded and inspected in
 Safari. Navigation and backend changes received separate agent reviews; their
 regressions are included in the suite.
+
+
+## Follow-up: direct graph navigation
+
+This update follows the user's revised interaction rules:
+
+- Inside a topic, wheel input reads that topic, including over its header or
+  padding. Reaching an edge does not navigate.
+- In empty space, scroll up toward the parent and overview, or down toward
+  details. A compact topic first centers for reading. Several paths remain a
+  choice in the graph; their title buttons replace the bottom chooser panel.
+- One wheel burst can move at most one level. Reading momentum crossing out of
+  a card cannot trigger navigation. Back still retraces visits independently.
+- A pulsing orb and **Thinking…** with **Stop** remain visible while a reply is
+  pending, including after visiting another topic.
+- **Conversation map** names both map controls. Hovering or keyboard-focusing a
+  map dot previews its title before jumping.
+
+Safari verified reading at a topic's edge, parent and child traversal from empty
+space, six direct graph choices, and keyboard entry into a readable topic. The
+Conversation map showed a title on keyboard focus before Enter navigated. Hover,
+focus, dismissal, and navigation are also covered by component tests.
+
+One real follow-up kept **Thinking…** visible while another topic was active.
+Completion cleared the indicator and offered the answer without moving that
+view. The final production build was reloaded and its graph keyboard navigation
+checked again.
+
+Current checks: **200 tests passed**, TypeScript passed, and the production build
+passed. Wheel-burst regressions cover ownership and one-level traversal; native
+scroll checks do not reproduce every physical trackpad's momentum behavior.

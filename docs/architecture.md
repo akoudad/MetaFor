@@ -33,23 +33,35 @@ The choice can include affected topics under different parents, their paths,
 and synthesis inputs. User interaction prevents camera takeover; loading saved
 work does not replay arrivals.
 
-The mini-map projects actual topic coordinates isometrically and supports pointer
-and keyboard navigation. Its diamond marks the camera destination, not a live
+The **Conversation map** projects actual topic coordinates isometrically and
+supports pointer and keyboard navigation. Hover or focus previews a topic title;
+activation jumps to it. Its diamond marks the camera destination, not a live
 camera position. This keeps ambient and camera frames out of React state updates.
 
-Ordinary wheel input only reads. Native answer scrolling is preserved; wheel
-input over empty space scrolls the active visible reader. Neither fresh gestures
-nor momentum at an edge change topics or camera. Topic links and the Explore
-action perform traversal. Pinch/Ctrl-wheel and explicit zoom controls retain
-geometric camera movement. Keyboard reading and scrollbar pointer input, like
-wheel input, cancel pending automatic answer following.
+Wheel ownership follows the pointer. Full topic readers keep native scrolling;
+wheel input over their headers or padding scrolls that topic's reader. A topic
+edge never changes the camera. Empty-space wheel input navigates the hierarchy:
+up goes to the parent (or from the root to the overview), down opens one child or
+frames several child choices. Down in a choice leaves the decision to the user;
+up returns to its parent reader. Down from the overview resumes the active reader,
+and a compact focused topic is centered before descending further.
+
+`advanceSpatialScroll` allows one navigation step after 70px of accumulated wheel
+movement, then consumes the rest of the burst. A 200ms pause starts a new burst.
+Topic-started gestures, pointer crossings into a topic, and scope changes consume
+the remaining gesture; moving back into empty space cannot convert reading
+momentum into navigation. Pinch/Ctrl-wheel and explicit zoom controls retain
+geometric camera movement. Reading input cancels pending automatic answer following.
 
 The reading, child-choice, and overview states are separate. A child-choice view
 frames its parent and direct children while keeping other readers mounted and
-hidden so their reading positions survive. An HTML chooser keeps titles legible
-even in a wide tree. Only `parentId` determines these paths; related links do not.
-Back retraces visit history; breadcrumbs follow ancestry. Returning restores
-saved reading state. The map never silently resumes a reader on wheel input.
+hidden so their reading positions survive. Choice and overview cards stay compact;
+their title buttons are the navigation targets, without a separate chooser panel.
+Arrow keys move among choice titles; Enter opens one and transfers focus to its
+reader once visible. Only `parentId` determines hierarchy paths; related links do
+not. Back retraces visit history; breadcrumbs follow ancestry. Returning restores
+saved reading state.
+
 Normal focus uses canonical graph coordinates and one reader; explicit passage
 links may use temporary source/reply positions. Source visits wait for a readable
 card before aligning the passage and do not modify composer selection. Outlines
@@ -106,7 +118,9 @@ resize, navigation, or dismissal removes the action to avoid a stale screen anch
 
 1. Capture the question, target, selection or annotation batch, placement mode, and explicitly included
    topics under a request ID. Clear the input immediately and show the submitted
-   question in its topic's pending card. A newly typed draft stays separate.
+   question in its topic's pending card. A global **Thinking…** status, pulsing orb,
+   and Stop action remain visible while navigating elsewhere. Completion, failure,
+   or cancellation clears that waiting status. A newly typed draft stays separate.
    Navigation does not change the captured target.
 2. Build bounded context from the selection, original question, genuine source
    anchors, recent excerpts, and summaries. Reserve up to 20,000 characters for
@@ -217,10 +231,10 @@ revealed once when chosen; later visits retain the user's reading position.
 Safari also verified the source/reply view and both readers' positions after
 refreshing the final production build at port 3002.
 
-Native Safari checks on the local production build at port 3001 verified import
+Earlier native Safari checks on the local production build at port 3001 verified import
 of that graph, the compact four-city layout and synthesis, source-link navigation,
 exact reading-position restoration, the section ask action and composer focus,
-and the topic chooser. The final overview was visually checked for compact edges
+and the former topic chooser. The final overview was visually checked for compact edges
 and redundant origin links. Physical trackpad/touch gestures, device performance,
 live arrival motion, and public deployment remain unverified.
 

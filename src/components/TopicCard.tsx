@@ -8,6 +8,7 @@ type TopicCardProps = {
   space: Conversation;
   item: Exploration;
   active: boolean;
+  graphChoice?: boolean;
   selection: SourceReference | null;
   annotations?: AnnotationRequest[];
   pendingQuestion?: string;
@@ -62,7 +63,7 @@ export default function TopicCard(props: TopicCardProps) {
   return <article className={`topic ${active ? "is-focused" : ""}`} data-topic={item.id} aria-label={item.title} onPointerEnter={() => props.onHover(item.id)} onPointerLeave={() => props.onHover(null)}>
     <div className="topic-header">
       <span className="topic-index">{String(getDepth(space, item.id)).padStart(2, "0")}</span>
-      <h2><button onClick={props.onFocus} aria-label={`Enter ${item.title}`}>{item.title}</button></h2>
+      <h2><button data-graph-choice={props.graphChoice || undefined} onClick={props.onFocus} aria-label={`Enter ${item.title}`}>{item.title}</button></h2>
       <button className="topic-move" data-move-topic={item.id} aria-label={`Move ${item.title}`} title="Drag to move this topic">⠿</button>
       <button className="topic-enter" onClick={props.onFocus} aria-label={`Focus ${item.title}`}>↗</button>
     </div>
