@@ -324,11 +324,11 @@ input, select { font: inherit; color: inherit; }
 .desktop-chat .model-selector-popover { max-height: calc(100dvh - 160px); overflow-y: auto; overscroll-behavior: contain; }
 .conversation-sidebar { position: absolute; z-index: 26; top: 108px; right: 28px; bottom: calc(var(--composer-clearance, 142px) + 14px); width: 184px; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; pointer-events: none; }
 .conversation-sidebar > .space-map { position: relative; right: auto; bottom: auto; flex: 0 0 auto; align-self: flex-end; pointer-events: auto; }
-.conversation-panel { min-height: 0; width: 100%; flex: 1 1 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; border-radius: 7px; background: #090909f5; pointer-events: auto; cursor: auto; }
+.conversation-panel { min-height: 0; width: 100%; flex: 0 1 370px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #282828; border-radius: 7px; background: #090909f5; pointer-events: auto; cursor: auto; }
 .conversation-panel-heading { display: flex; align-items: center; gap: 9px; width: 100%; flex: 0 0 40px; padding: 0 12px; color: #bcbcbc; font-size: 12px; text-align: left; }
 .conversation-panel-heading > span:first-child { flex: 1; }
 .conversation-turn-count { color: #626262; font: 10px ui-monospace, monospace; }
-.conversation-reader { min-height: 0; flex: 1; padding: 0 10px 12px; overflow-wrap: anywhere; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #444 transparent; cursor: text; }
+.conversation-reader { min-height: 0; flex: 1; padding: 0 8px 10px; overflow-wrap: anywhere; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #444 transparent; cursor: text; }
 .conversation-reader-hint { margin: 0 0 20px; color: #707070; font-size: 10px; line-height: 1.5; }
 .conversation-turn + .conversation-turn { padding-top: 22px; margin-top: 24px; border-top: 1px solid #292929; }
 .conversation-speaker { color: #797979; font-size: 10px; }
@@ -340,14 +340,14 @@ input, select { font: inherit; color: inherit; }
 .conversation-answer-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: 10px; }
 .conversation-answer-heading > span:last-child { color: #777; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .conversation-answer[data-active] .conversation-answer-heading > span:last-child { color: #b9b9b9; }
-.conversation-answer-part { margin: 0 0 18px; padding: 0 0 0 10px; border-left: 1px solid #252525; }
+.conversation-answer-part { margin: 0 0 16px; padding: 0 0 0 6px; border-left: 1px solid #252525; }
 .conversation-answer-part:hover { border-left-color: #606060; }
 .conversation-part-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.conversation-reader h3 { margin: 0 0 9px; font-size: 13px; font-weight: 500; line-height: 1.5; }
+.conversation-reader h3 { margin: 0 0 8px; font-size: 12px; font-weight: 500; line-height: 1.5; }
 .conversation-part-heading button { flex: 0 0 24px; margin-left: auto; margin-bottom: 5px; color: #888; font-size: 15px; }
-.conversation-reader .answer-markdown { font-size: 12px; line-height: 1.7; color: #b9b9b9; }
+.conversation-reader .answer-markdown { font-size: 11px; line-height: 1.65; color: #b9b9b9; }
 .conversation-reader .answer-markdown p { margin: 0 0 10px; }
-.conversation-reader .answer-markdown h1, .conversation-reader .answer-markdown h2, .conversation-reader .answer-markdown h3, .conversation-reader .answer-markdown h4 { font-size: 13px; }
+.conversation-reader .answer-markdown h1, .conversation-reader .answer-markdown h2, .conversation-reader .answer-markdown h3, .conversation-reader .answer-markdown h4 { font-size: 12px; }
 .conversation-reader .answer-markdown ul, .conversation-reader .answer-markdown ol { padding-left: 18px; }
 @media (min-width: 1000px) {
   .has-conversation-reader .conversation-sidebar { bottom: 38px; }
@@ -359,6 +359,7 @@ input, select { font: inherit; color: inherit; }
 }
 @media (max-width: 700px) {
   .conversation-sidebar { top: 98px; right: 12px; width: 132px; }
+  .conversation-panel { flex-basis: 290px; }
   .conversation-panel-heading { padding: 0 9px; gap: 6px; font-size: 11px; }
   .conversation-sidebar > .space-map { width: 132px; }
   .space .zoom-controls { right: 160px; }

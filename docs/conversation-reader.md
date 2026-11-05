@@ -1,7 +1,8 @@
 # Conversation reader
 
 The **Conversation** panel stays visible above **Conversation map**, at the same
-narrow width. It provides a classic, independently scrollable view of saved
+narrow width. Its height is about twice the map’s height and shrinks in short
+windows; smaller text and tighter side padding leave more room per line. It provides a classic, independently scrollable view of saved
 questions and answers using full message sections. One request split across
 several topics shows its question once and then every answer part. Separate
 annotation questions keep their selected text.
