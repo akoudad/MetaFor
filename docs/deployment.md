@@ -40,9 +40,10 @@ npx next start --hostname 0.0.0.0
 Set `PORT` through the host if needed. Use HTTPS at the proxy and preserve the
 public `Host` and overwrite `x-forwarded-proto` with the actual public scheme;
 the API checks request origin and does not trust a forwarded host header.
-Allow at least 60 seconds for the answer route. The answer writer and organizer
-run sequentially within one shared 55-second provider timeout; cancellation
-aborts the active call. The app returns only after both stages validate.
+Allow at least 60 seconds for the answer route. Upload, answer writing, and
+organization share a 55-second route deadline; upload also has a 10-second
+limit. The two model calls run sequentially, and cancellation aborts the active
+call. The app returns only after both stages validate.
 See [Next.js deployment](https://nextjs.org/docs/app/getting-started/deploying)
 and [CLI options](https://nextjs.org/docs/app/api-reference/cli/next).
 

@@ -103,6 +103,9 @@ Completion cleared the indicator and offered the answer without moving that
 view. The final production build was reloaded and its graph keyboard navigation
 checked again.
 
-Current checks: **200 tests passed**, TypeScript passed, and the production build
+Checks at that revision: **200 tests passed**, TypeScript passed, and the production build
 passed. Wheel-burst regressions cover ownership and one-level traversal; native
 scroll checks do not reproduce every physical trackpad's momentum behavior.
+
+The subsequent [deep review](deep-review.md) covers clearer overview/depth
+navigation, late-answer recovery, storage integrity, and synthesis context.

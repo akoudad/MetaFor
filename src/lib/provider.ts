@@ -40,8 +40,11 @@ function configuration(env: Environment) {
 
 async function limitedJson(message: Request | Response, maximum: number, tooLarge: AnswerError, invalid: AnswerError, signal?: AbortSignal) {
   const declared = Number(message.headers.get("content-length"));
-  if (declared > maximum) throw tooLarge;
-  if (!message.body || signal?.aborted) throw invalid;
+  if (declared > maximum || signal?.aborted) {
+    void message.body?.cancel().catch(() => {});
+    throw declared > maximum ? tooLarge : invalid;
+  }
+  if (!message.body) throw invalid;
   const reader = message.body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -58,6 +61,7 @@ async function limitedJson(message: Request | Response, maximum: number, tooLarg
     }
     result += decoder.decode();
   } catch (error) {
+    cancel();
     if (error instanceof AnswerError) throw error;
     throw invalid;
   } finally {
@@ -98,6 +102,7 @@ export async function generateAnswer(request: AnswerRequest, options: ProviderOp
       });
       if (!response.ok) {
         // Never return provider bodies: they may contain credentials or request text.
+        void response.body?.cancel().catch(() => {});
         if (response.status === 429) throw new AnswerError("provider_rate_limit", "The model is busy or its allowance has been reached. Wait a moment before retrying.", 429, true);
         if ([401, 403].includes(response.status)) throw new AnswerError("provider_credentials", "The model credentials were rejected. Check the server configuration.", 502);
         throw new AnswerError("provider_error", "The model could not complete this request. Your question is kept.", 502, response.status >= 500);
@@ -150,12 +155,12 @@ function checkOrigin(request: Request) {
   } catch { throw invalid(); }
 }
 
-async function readRequest(request: Request, timeoutMs: number) {
+async function readRequest(request: Request, timeoutMs: number, signal = request.signal) {
   const controller = new AbortController();
   let timedOut = false;
   const cancel = () => controller.abort();
-  if (request.signal.aborted) controller.abort();
-  request.signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) controller.abort();
+  signal.addEventListener("abort", cancel, { once: true });
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     return await limitedJson(request, MAX_REQUEST_BYTES,
@@ -166,7 +171,7 @@ async function readRequest(request: Request, timeoutMs: number) {
     throw error;
   } finally {
     clearTimeout(timer);
-    request.signal.removeEventListener("abort", cancel);
+    signal.removeEventListener("abort", cancel);
   }
 }
 
@@ -187,6 +192,14 @@ export function createAnswerHandler(options: ProviderOptions = {}) {
   let globalRate = { start: 0, count: 0 };
   return async function handle(request: Request): Promise<Response> {
     let acquiredIP: string | null = null;
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    let timedOut = false;
+    if (request.signal.aborted) controller.abort();
+    request.signal.addEventListener("abort", cancel, { once: true });
+    // Include upload and both model calls inside the route's 60-second host
+    // limit, leaving time to return a useful response before the host cuts off.
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 55000);
     try {
       checkOrigin(request);
       if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new AnswerError("invalid_content_type", "The answer request must use JSON.", 415);
@@ -194,7 +207,7 @@ export function createAnswerHandler(options: ProviderOptions = {}) {
       const code = env.DEMO_ACCESS_CODE?.trim();
       if (code && !sameSecret(code, request.headers.get("x-demo-code"))) throw new AnswerError("access_code_required", "Enter the demo access code to use live AI.", 401);
       configuration(env);
-      const input = await readRequest(request, options.bodyTimeoutMs ?? 10000);
+      const input = await readRequest(request, options.bodyTimeoutMs ?? 10000, controller.signal);
       const answerRequest = validateAnswerRequest(input);
       const now = (options.now ?? Date.now)();
       for (const [key, bucket] of rates) if (now - bucket.start >= 60000) rates.delete(key);
@@ -208,12 +221,15 @@ export function createAnswerHandler(options: ProviderOptions = {}) {
       active += 1;
       activeIPs.add(ip);
       acquiredIP = ip;
-      const answer = await generateAnswer(answerRequest, options, request.signal);
+      const answer = await generateAnswer(answerRequest, options, controller.signal);
       return Response.json(answer, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
       if (request.signal.aborted) return responseError(new AnswerError("cancelled", "The request was cancelled. Your question is kept.", 499, true));
+      if (timedOut) return responseError(new AnswerError("request_timeout", "The request took too long. Your question is kept; please retry.", 504, true));
       return responseError(error);
     } finally {
+      clearTimeout(timer);
+      request.signal.removeEventListener("abort", cancel);
       if (acquiredIP !== null) { active -= 1; activeIPs.delete(acquiredIP); }
     }
   };

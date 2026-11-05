@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAP_PADDING, mapDestination, projectMapPoint, projectSpaceMap } from "../src/lib/minimap";
+import { MAP_PADDING, mapDestination, nearestMapNode, projectMapPoint, projectSpaceMap } from "../src/lib/minimap";
 
 test("the map fits every point of wide and deep graphs with finite coordinates", () => {
   const nodes = Array.from({ length: 200 }, (_, index) => ({ id: `topic-${index}`, position: { x: (index % 9 - 4) * 15000, y: -index * 1280, z: -index * 1050 } }));
@@ -64,4 +64,17 @@ test("empty, duplicate, invalid and extreme inputs remain bounded", () => {
   ], 0, -100);
   assert.deepEqual(map.nodes.map((node) => node.id), ["valid", "extreme"]);
   assert.ok(map.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y)));
+});
+
+test("nearby map dots remain individually selectable despite overlapping hit areas", () => {
+  const map = projectSpaceMap([
+    { id: "near", position: { x: 0, y: 0, z: 0 } },
+    { id: "front", position: { x: 20, y: -10, z: -10 } },
+  ]);
+  const [near, front] = map.nodes;
+  assert.ok(Math.hypot(near.x - front.x, near.y - front.y) < 8);
+  assert.equal(nearestMapNode(near, map)?.id, "near");
+  assert.equal(nearestMapNode(front, map)?.id, "front");
+  assert.equal(nearestMapNode({ x: 0, y: 0 }, map), null);
+  assert.equal(nearestMapNode({ x: NaN, y: 0 }, map), null);
 });

@@ -147,6 +147,22 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string) { this.data.set(key, value); }
 }
 
+async function putIndexed(store: string, key: string, value: unknown) {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("metaphore-spaces", 1);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(store, "readwrite");
+      transaction.objectStore(store).put(value, key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } finally { db.close(); }
+}
+
 test("annotation drafts reload from IndexedDB and localStorage without changing captured text", async () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   const indexed = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
@@ -287,6 +303,109 @@ test("a failed IndexedDB save cannot overwrite a newer emergency fallback", asyn
     backupSnapshot(emergency);
     await inFlight;
     assert.deepEqual(await loadSnapshot(), emergency);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
+    if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");
+  }
+});
+
+test("late saves cannot replace a newer persisted conversation or its library entry", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const indexed = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  try {
+    for (const database of [new IDBFactory(), undefined]) {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: new MemoryStorage() });
+      Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: database });
+      const older = fixture();
+      const newer = structuredClone(older);
+      newer.savedAt = "2026-11-04T20:05:00.000Z";
+      newer.conversation.title = "Keep the newer conversation";
+      newer.view.places["job-search"].draft = "Keep my latest unsent question";
+      await saveSnapshot(newer);
+      await saveSnapshot(older);
+      assert.deepEqual(await loadSnapshot(older.conversation.id), newer);
+      assert.equal((await listSnapshots())[0].title, newer.conversation.title);
+    }
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
+    if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");
+  }
+});
+
+test("a mismatched recovery record does not hide a valid saved conversation", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const indexed = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  const storage = new MemoryStorage();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
+  try {
+    const snapshot = fixture();
+    await saveSnapshot(snapshot);
+    const wrong = structuredClone(snapshot);
+    wrong.conversation.id = "another-conversation";
+    wrong.savedAt = "2026-11-04T20:05:00.000Z";
+    const key = `metaphore.ingx.v1:${snapshot.conversation.id}`;
+    storage.setItem(key, serializeSnapshot(wrong));
+    assert.deepEqual(await loadSnapshot(snapshot.conversation.id), snapshot);
+    assert.equal(storage.getItem(key), serializeSnapshot(wrong), "recovery never silently deletes the damaged record");
+    Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: undefined });
+    await assert.rejects(() => loadSnapshot(snapshot.conversation.id), /mismatched ID/);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
+    if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");
+  }
+});
+
+test("damaged saved entries are isolated while intact chats remain available with a warning", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const indexed = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  const storage = new MemoryStorage();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
+  try {
+    const snapshot = fixture();
+    await saveSnapshot(snapshot);
+    storage.setItem("metaphore.ingx.v1:damaged", "{ unfinished data");
+    const wrong = structuredClone(snapshot);
+    wrong.conversation.id = "invented-entry";
+    storage.setItem("metaphore.ingx.v1:wrong-key", serializeSnapshot(wrong));
+    await putIndexed("library", "invalid-metadata", { id: "invalid-metadata", title: 42, savedAt: snapshot.savedAt });
+    await putIndexed("library", "wrong-index-key", { id: "another-invented-entry", title: "Wrong key", savedAt: snapshot.savedAt });
+    const warnings: string[] = [];
+    assert.deepEqual(await listSnapshots((message) => warnings.push(message)), [{ id: snapshot.conversation.id, title: snapshot.conversation.title, savedAt: snapshot.savedAt }]);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /data has been kept/);
+    assert.deepEqual(await loadSnapshot(), snapshot);
+    assert.equal(storage.getItem("metaphore.ingx.v1:damaged"), "{ unfinished data");
+    Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: undefined });
+    await assert.rejects(() => listSnapshots(), /Saved chats could not be read/);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
+    if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");
+  }
+});
+
+test("saving retains damaged data and uses the intact storage backend when possible", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const indexed = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  const storage = new MemoryStorage();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
+  try {
+    const snapshot = fixture();
+    await saveSnapshot(snapshot);
+    await putIndexed("snapshots", snapshot.conversation.id, "{ damaged original");
+    snapshot.savedAt = "2026-11-04T20:05:00.000Z";
+    snapshot.view.places["job-search"].draft = "Recoverable new work";
+    await saveSnapshot(snapshot);
+    const warnings: string[] = [];
+    assert.deepEqual(await loadSnapshot(snapshot.conversation.id, (message) => warnings.push(message)), snapshot);
+    assert.equal(warnings.length, 1, "the damaged IndexedDB record remains available for recovery");
+
+    const key = `metaphore.ingx.v1:${snapshot.conversation.id}`;
+    storage.setItem(key, "{ damaged fallback");
+    await assert.rejects(() => saveSnapshot(snapshot), /export an .ingx copy/);
+    assert.equal(storage.getItem(key), "{ damaged fallback", "failed saves never destroy damaged raw data");
   } finally {
     if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
     if (indexed) Object.defineProperty(globalThis, "indexedDB", indexed); else Reflect.deleteProperty(globalThis, "indexedDB");

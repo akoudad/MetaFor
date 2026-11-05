@@ -30,13 +30,17 @@ to the destination; hidden tabs pause the timeline without catching up on return
 When several subjects arrive together, new topics fan out into a fitted choice
 view instead of entering an arbitrary first answer. Reused topics remain in place.
 The choice can include affected topics under different parents, their paths,
-and synthesis inputs. User interaction prevents camera takeover; loading saved
-work does not replay arrivals.
+and synthesis inputs. A single organized destination opens directly for reading.
+User interaction prevents camera takeover; loading saved work does not replay
+arrivals. **Open answer** remains available when a reply arrives elsewhere.
 
 The **Conversation map** projects actual topic coordinates isometrically and
 supports pointer and keyboard navigation. Hover or focus previews a topic title;
-activation jumps to it. Its diamond marks the camera destination, not a live
-camera position. This keeps ambient and camera frames out of React state updates.
+activation jumps to it. Pointer selection uses the nearest actual dot within its
+hit radius, accounting for SVG scaling and letterboxing, so overlapping hit areas
+do not select whichever node was painted last. Its diamond marks the camera
+destination, not a live camera position. This keeps ambient and camera frames out
+of React state updates.
 
 Wheel ownership follows the pointer. Full topic readers keep native scrolling;
 wheel input over their headers or padding scrolls that topic's reader. A topic
@@ -60,7 +64,10 @@ their title buttons are the navigation targets, without a separate chooser panel
 Arrow keys move among choice titles; Enter opens one and transfers focus to its
 reader once visible. Only `parentId` determines hierarchy paths; related links do
 not. Back retraces visit history; breadcrumbs follow ancestry. Returning restores
-saved reading state.
+saved reading state. Visible controls also move up to the parent, explore deeper
+topics, or return from the overview to reading. **Asking about** names the active
+topic above the composer. Follow-up links appear beside their originating
+sections, including every covered section of a multi-section selection.
 
 Normal focus uses canonical graph coordinates and one reader; explicit passage
 links may use temporary source/reply positions. Source visits wait for a readable
@@ -103,7 +110,10 @@ The current model is nested JSON, not a separate database table for every record
 
 Navigation parents form a tree; the separate connection graph may contain cycles.
 Source selections must match rendered text within one assistant message, including
-selections across its sections. App-assigned IDs preserve existing answer text.
+selections across its sections. Within a topic, a message source must precede its
+reply; message-source chains cannot contain cycles across topics either. A later
+reply can revisit a topic without creating a circular message dependency.
+App-assigned IDs preserve existing answer text.
 
 Text selection first creates a temporary, range-positioned action. Choosing
 **Ask about this** commits its validated source reference and focuses the composer.
@@ -121,12 +131,16 @@ resize, navigation, or dismissal removes the action to avoid a stale screen anch
    question in its topic's pending card. A global **Thinking…** status, pulsing orb,
    and Stop action remain visible while navigating elsewhere. Completion, failure,
    or cancellation clears that waiting status. A newly typed draft stays separate.
-   Navigation does not change the captured target.
+   Navigation does not change the captured target. Paused questions expose
+   **View question**, **Retry**, and **Dismiss** outside the originating card.
 2. Build bounded context from the selection, original question, genuine source
    anchors, recent excerpts, and summaries. Reserve up to 20,000 characters for
    at most 12 source anchors. Annotation source paths precede an unrelated active
-   path. Then prioritize the active topic, explicitly included
-   topics, ancestors, then up to eight direct children. Unrelated siblings do not
+   path. Prioritize annotated sources, the active topic, explicitly included
+   topics, and accepted synthesis contributors, followed by ancestors, retrieved
+   topics, and up to eight direct children. Contributor expansion follows one hop
+   from the active/annotation paths and explicitly included topics, adding at most
+   16 topics; it does not recurse through the graph. Unrelated siblings do not
    automatically receive full excerpts. Topics and summaries carry `parentId`.
    The total JSON budget is 60,000 characters, not a token-count guarantee.
 3. Call `muse-spark-1.3` as the answer writer. It produces validated Markdown
@@ -178,7 +192,12 @@ keeps its source on the messages without inventing a parent passage.
 
 Context records distinguish excerpts from summaries and flag truncation.
 Original user requests and later corrections have a separate bounded allocation
-across ancestors and included topics, before assistant histories consume space.
+across source paths, included topics, contributors, and retrieved topics before
+assistant histories consume space. Entries retain their topic and message IDs;
+identical wording in separate topics or after a correction is preserved. Only the
+root prompt already supplied as `originalQuestion` is excluded from this list.
+The model interprets local scope and which later corrections supersede earlier
+requirements; text equality alone does not remove a requirement.
 Generic lexical relevance ranks distant topics and retrieves up to three related
 bodies. This is bounded retrieval, not a guarantee that every relevant topic fits.
 Creation sources and later message sources both expose forward reply links;
@@ -188,18 +207,21 @@ historical text was read. Related or synthesis links alone do not include every
 word of their inputs. Explicit inclusion and direct-child selection still obey
 the shared context budget.
 
-Both sequential model calls share one 55-second timeout and cancellation signal.
-Keys remain in server environment variables. Errors preserve the question for
-retry. Answers arrive whole; streaming, browsing, and model-requested retrieval
-are not implemented.
+The route applies one 55-second deadline across upload, context preparation,
+writer, and organizer, within its 60-second host limit. Upload also has a separate
+10-second deadline. Cancellation propagates to both sequential model calls and
+response-body reads. Keys remain in server environment variables. Errors preserve
+the question for retry. Answers arrive whole; streaming, browsing, and
+model-requested retrieval are not implemented.
 
 ## Persistence and `.ingx`
 
 `.ingx` means Interactive Navigation Graph x. Version 1 is UTF-8 JSON containing
 `format`, `version`, `savedAt`, `conversation`, and `view`. Import validates a
 2 MiB size limit, allowed fields, counts, text limits, finite coordinates, unique
-IDs, references, quotes, and parent cycles. Imported spaces receive a new
-conversation ID, preserving the existing library. Credentials are not exported.
+IDs, references, quotes, parent cycles, and message-source chronology and cycles.
+Imported spaces receive a new conversation ID, preserving the existing library.
+Credentials are not exported.
 
 Optional `view.pending` records the request ID, target topic, question, selected
 passage or annotation batch, and included topic IDs. It does not duplicate the conversation or store
@@ -211,10 +233,18 @@ fields, annotation queues, paired views, or the synthesis connection type.
 
 IndexedDB stores snapshots by conversation ID. A synchronous localStorage backup
 protects recent state when the page is hidden or closed and provides a fallback
-when IndexedDB is unavailable. Loading chooses the newer copy; serialized writes
-avoid older autosaves overwriting a newer backup. Storage failures are reported,
-and old conversations are not silently evicted. Browser storage can still be
-cleared or unavailable; exported files provide a separate copy.
+when IndexedDB is unavailable. Loading chooses the newer intact copy and can
+recover from the other backend if a copy is unreadable or has a mismatched ID.
+IndexedDB compares timestamps and updates the snapshot and library in one
+transaction; serialized writes also protect newer emergency backups from older
+autosaves. Damaged library entries do not hide intact chats: the library reports
+a warning, and damaged raw records are retained. A save uses the other backend
+when possible; if neither is usable, it reports an error and offers export.
+
+Edit a given conversation in one tab at a time. There is no cross-tab merge or
+revision-conflict handling: stale content saved later from another tab can still
+replace current work. Old conversations are not silently evicted, but browser
+storage can be cleared or unavailable; exported files provide a separate copy.
 
 The rename to metafor preserves the original browser storage identifiers and
 `.ingx` version, so existing conversations remain readable.

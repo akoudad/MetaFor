@@ -3,7 +3,7 @@
 import { memo, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { SpatialNode, SpatialPoint } from "@/lib/spatial";
-import { MAP_HEIGHT, MAP_WIDTH, mapDestination, projectSpaceMap } from "@/lib/minimap";
+import { MAP_HEIGHT, MAP_WIDTH, mapDestination, nearestMapNode, projectSpaceMap } from "@/lib/minimap";
 import type { SpatialLink } from "./SpatialWorld";
 
 type SpaceMapProps = {
@@ -22,6 +22,7 @@ function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview
   const synthesisIds = useMemo(() => new Set(links.filter((link) => link.type === "synthesis").map((link) => link.to)), [links]);
   const destination = mapDestination(view, projection);
   const elements = useRef(new Map<string, SVGGElement>());
+  const viewport = useRef<SVGSVGElement>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [dismissedId, setDismissedId] = useState<string | null>(null);
@@ -30,6 +31,16 @@ function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview
   const preview = previewId && previewId !== dismissedId ? byId.get(previewId) : undefined;
   const tabStop = focusedId && byId.has(focusedId) ? focusedId : byId.has(activeId) ? activeId : projection.nodes[0]?.id;
   const drawn = [...projection.nodes].sort((a, b) => a.id === activeId ? 1 : b.id === activeId ? -1 : a.depth - b.depth);
+
+  const pointerNode = (event: { clientX: number; clientY: number }) => {
+    const rect = viewport.current?.getBoundingClientRect();
+    if (!rect?.width || !rect.height) return null;
+    // SVG's default xMidYMid meet can letterbox the viewBox inside its CSS bounds.
+    const scale = Math.min(rect.width / MAP_WIDTH, rect.height / MAP_HEIGHT);
+    const left = rect.left + (rect.width - MAP_WIDTH * scale) / 2;
+    const top = rect.top + (rect.height - MAP_HEIGHT * scale) / 2;
+    return nearestMapNode({ x: (event.clientX - left) / scale, y: (event.clientY - top) / scale }, projection);
+  };
 
   const keydown = (event: KeyboardEvent<SVGGElement>, id: string) => {
     if (event.key === "Escape" && preview) { event.preventDefault(); event.stopPropagation(); setDismissedId(preview.id); return; }
@@ -42,13 +53,22 @@ function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview
     else if (event.key === "End") next = projection.nodes.length - 1;
     else return;
     event.preventDefault();
-    elements.current.get(projection.nodes[next].id)?.focus();
+    elements.current.get(projection.nodes[next].id)?.focus({ preventScroll: true });
   };
 
   return <aside className="space-map" aria-label="Conversation map">
     <div className="space-map-heading"><span>Conversation map</span><button className="space-map-overview" type="button" onClick={onOverview} aria-label="Show Conversation map" title="Show Conversation map">↗</button></div>
     <div style={{ position: "relative" }}>
-    <svg className="space-map-viewport" viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`} width={MAP_WIDTH} height={MAP_HEIGHT} role="group" aria-label="Conversation map topics" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null); }}>
+    <svg ref={viewport} className="space-map-viewport" viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`} width={MAP_WIDTH} height={MAP_HEIGHT} role="group" aria-label="Conversation map topics" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null); }} onPointerMove={(event) => { setHoveredId(pointerNode(event)?.id ?? null); setDismissedId(null); }} onPointerLeave={() => setHoveredId(null)} onClickCapture={(event) => {
+      // Keyboard and assistive-technology activation retains the focused button.
+      if (!event.detail) return;
+      const node = pointerNode(event);
+      if (!node) return;
+      event.preventDefault();
+      event.stopPropagation();
+      elements.current.get(node.id)?.focus({ preventScroll: true });
+      onNavigate(node.id);
+    }}>
       <defs><marker id="map-synthesis-arrow" viewBox="0 0 6 6" refX="9" refY="3" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0L6 3L0 6Z" fill="#999" /></marker></defs>
       {links.map((link, index) => {
         if (link.type === "origin" && synthesisIds.has(link.to)) return null;
@@ -60,7 +80,7 @@ function SpaceMap({ nodes, links, activeId, view, labels, onNavigate, onOverview
         <title>{destination.outside ? "Camera destination is beyond this map; the marker points toward it." : "Camera destination"}</title>
         <path d={destination.outside ? "M4 0L-3 -3L-3 3Z" : "M0 -4L4 0L0 4L-4 0Z"} />
       </g>}
-      {drawn.map((node) => <g key={node.id} ref={(element) => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }} className={`space-map-node ${node.id === activeId ? "is-active" : ""}`} data-map-node={node.id} transform={`translate(${node.x} ${node.y})`} role="button" tabIndex={node.id === tabStop ? 0 : -1} aria-label={`Focus topic: ${labels?.[node.id] || node.id}`} aria-current={node.id === activeId ? "location" : undefined} aria-describedby={preview?.id === node.id ? tooltipId : undefined} onPointerEnter={() => { setHoveredId(node.id); setDismissedId(null); }} onPointerLeave={() => setHoveredId(null)} onFocus={() => { setFocusedId(node.id); setHoveredId(null); setDismissedId(null); }} onClick={() => onNavigate(node.id)} onKeyDown={(event) => keydown(event, node.id)}>
+      {drawn.map((node) => <g key={node.id} ref={(element) => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }} className={`space-map-node ${node.id === activeId ? "is-active" : ""} ${node.id === hoveredId ? "is-preview" : ""}`} data-map-node={node.id} transform={`translate(${node.x} ${node.y})`} role="button" tabIndex={node.id === tabStop ? 0 : -1} aria-label={`Focus topic: ${labels?.[node.id] || node.id}`} aria-current={node.id === activeId ? "location" : undefined} aria-describedby={preview?.id === node.id ? tooltipId : undefined} onPointerEnter={(event) => { setHoveredId(pointerNode(event)?.id ?? node.id); setDismissedId(null); }} onPointerLeave={() => setHoveredId(null)} onFocus={() => { setFocusedId(node.id); setHoveredId(null); setDismissedId(null); }} onClick={() => onNavigate(node.id)} onKeyDown={(event) => keydown(event, node.id)}>
         <circle className="space-map-hit" r={8} style={{ fill: "transparent", stroke: "none" }} />
         <circle className="space-map-dot" r={node.id === activeId ? 3.4 : 2.2} />
       </g>)}

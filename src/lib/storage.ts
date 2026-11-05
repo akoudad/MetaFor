@@ -233,9 +233,9 @@ function writeFallback(serialized: string, entry: SavedSpace, sequence: number) 
   if (previous) {
     const known = fallbackWrites.get(entry.id);
     if (known?.serialized === previous && known.sequence > sequence) return;
-    try {
-      if (Date.parse(parseSnapshot(previous).savedAt) > Date.parse(entry.savedAt)) return;
-    } catch { /* A fresh validated snapshot can replace a damaged fallback copy. */ }
+    const saved = parseSaved(previous)!;
+    if (saved.conversation.id !== entry.id) throw new InvalidSavedData("The saved-space record has a mismatched ID.");
+    if (Date.parse(saved.savedAt) > Date.parse(entry.savedAt)) return;
   }
   storage.setItem(key, serialized);
   fallbackWrites.set(entry.id, { serialized, sequence });
@@ -248,7 +248,9 @@ function cleanFallback(serialized: string, entry: SavedSpace, sequence: number) 
   if (!current) return;
   const known = fallbackWrites.get(entry.id);
   if (known?.serialized === current && known.sequence > sequence) return;
-  const savedAt = Date.parse(parseSnapshot(current).savedAt);
+  const saved = parseSnapshot(current);
+  if (saved.conversation.id !== entry.id) return;
+  const savedAt = Date.parse(saved.savedAt);
   if (current === serialized || savedAt < Date.parse(entry.savedAt) || (savedAt === Date.parse(entry.savedAt) && known?.serialized === current && known.sequence <= sequence)) {
     storage.removeItem(key);
     if (fallbackWrites.get(entry.id)?.serialized === current) fallbackWrites.delete(entry.id);
@@ -265,48 +267,67 @@ function parseSaved(value: unknown): Snapshot | null {
   }
 }
 
-async function indexedLibrary(): Promise<SavedSpace[]> {
+type LibraryResult = { items: SavedSpace[]; damaged: number };
+
+async function indexedLibrary(): Promise<LibraryResult> {
   const db = await openDatabase();
   try {
-    const values = await requestResult(db.transaction(LIBRARY, "readonly").objectStore(LIBRARY).getAll());
-    try { return values.map(metadata); }
-    catch { throw new InvalidSavedData("The saved-space index contains invalid data."); }
+    const store = db.transaction(LIBRARY, "readonly").objectStore(LIBRARY);
+    const [values, keys] = await Promise.all([requestResult(store.getAll()), requestResult(store.getAllKeys())]);
+    const result: LibraryResult = { items: [], damaged: 0 };
+    for (const [index, value] of values.entries()) {
+      try {
+        const saved = metadata(value);
+        if (saved.id !== keys[index]) throw new Error("Mismatched saved-space ID.");
+        result.items.push(saved);
+      } catch { result.damaged += 1; }
+    }
+    return result;
   } finally { db.close(); }
 }
 
-function fallbackLibrary(): SavedSpace[] {
+function fallbackLibrary(): LibraryResult {
   const storage = fallbackStorage();
-  const result: SavedSpace[] = [];
+  const result: LibraryResult = { items: [], damaged: 0 };
   for (let index = 0; index < storage.length; index += 1) {
     const key = storage.key(index);
     if (!key?.startsWith(FALLBACK_PREFIX)) continue;
-    const snapshot = parseSaved(storage.getItem(key));
-    if (snapshot) result.push({ id: snapshot.conversation.id, title: snapshot.conversation.title, savedAt: snapshot.savedAt });
+    const value = storage.getItem(key);
+    try {
+      const snapshot = parseSaved(value);
+      if (!snapshot) continue;
+      if (key !== `${FALLBACK_PREFIX}${snapshot.conversation.id}`) throw new Error("Mismatched saved-space ID.");
+      result.items.push({ id: snapshot.conversation.id, title: snapshot.conversation.title, savedAt: snapshot.savedAt });
+    } catch { result.damaged += 1; }
   }
   return result;
 }
 
-export async function listSnapshots(): Promise<SavedSpace[]> {
+export async function listSnapshots(onWarning?: (message: string) => void): Promise<SavedSpace[]> {
   const results = await Promise.allSettled([indexedLibrary(), Promise.resolve().then(fallbackLibrary)]);
   const merged = new Map<string, SavedSpace>();
   let available = false;
+  let damaged = 0;
   for (const result of results) {
-    if (result.status === "rejected") {
-      if (result.reason instanceof InvalidSavedData) throw result.reason;
-      continue;
-    }
+    if (result.status === "rejected") continue;
     available = true;
-    for (const saved of result.value) {
+    damaged += result.value.damaged;
+    for (const saved of result.value.items) {
       const previous = merged.get(saved.id);
       if (!previous || Date.parse(saved.savedAt) >= Date.parse(previous.savedAt)) merged.set(saved.id, saved);
     }
   }
   if (!available) throw new Error("Local storage is unavailable. You can keep working and export an .ingx copy.");
+  if (damaged) {
+    const message = "Some saved copies could not be read. Their data has been kept; intact chats are still available.";
+    if (!merged.size) throw new InvalidSavedData("Saved chats could not be read. Their data has been kept; you can import an .ingx backup.");
+    onWarning?.(message);
+  }
   return [...merged.values()].sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt));
 }
 
-export async function loadSnapshot(id?: string): Promise<Snapshot | null> {
-  const selected = id ?? (await listSnapshots())[0]?.id;
+export async function loadSnapshot(id?: string, onWarning?: (message: string) => void): Promise<Snapshot | null> {
+  const selected = id ?? (await listSnapshots(onWarning))[0]?.id;
   if (!selected) return null;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,159}$/.test(selected) || unsafeKeys.has(selected)) throw new Error("The saved-space ID is invalid.");
   const fromIndexed = async () => {
@@ -330,13 +351,19 @@ export async function loadSnapshot(id?: string): Promise<Snapshot | null> {
     }
     available = true;
     if (result.value) {
-      if (result.value.conversation.id !== selected) throw new Error("The saved-space record has a mismatched ID.");
+      if (result.value.conversation.id !== selected) {
+        invalid = new InvalidSavedData("The saved-space record has a mismatched ID.");
+        continue;
+      }
       candidates.push(result.value);
     }
   }
   // Prefer the emergency copy on an equal timestamp; it may be newer than an
   // IndexedDB write that was already in flight when the page was hidden.
-  if (candidates.length) return candidates.reverse().sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt))[0];
+  if (candidates.length) {
+    if (invalid) onWarning?.("One saved copy could not be read. An intact copy was restored; the damaged data has been kept.");
+    return candidates.reverse().sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt))[0];
+  }
   if (invalid) throw invalid;
   if (!available) throw new Error("Could not open local storage. Your exported .ingx files can still be imported.");
   return null;
@@ -348,8 +375,23 @@ async function writeSnapshot(serialized: string, entry: SavedSpace, sequence: nu
     try {
       await new Promise<void>((resolve, reject) => {
         const transaction = db.transaction([SNAPSHOTS, LIBRARY], "readwrite");
-        transaction.objectStore(SNAPSHOTS).put(serialized, entry.id);
-        transaction.objectStore(LIBRARY).put(entry, entry.id);
+        const store = transaction.objectStore(SNAPSHOTS);
+        const existing = store.get(entry.id);
+        existing.onsuccess = () => {
+          // Compare and write in one transaction so another tab cannot insert
+          // a newer snapshot between the check and these two related writes.
+          try {
+            const previous = parseSaved(existing.result);
+            if (previous && previous.conversation.id !== entry.id) throw new InvalidSavedData("The saved-space record has a mismatched ID.");
+            if (previous && Date.parse(previous.savedAt) > Date.parse(entry.savedAt)) return;
+          } catch (error) {
+            // Retain damaged data for recovery; the validated new copy can
+            // still be saved in the other storage backend.
+            reject(error); transaction.abort(); return;
+          }
+          store.put(serialized, entry.id);
+          transaction.objectStore(LIBRARY).put(entry, entry.id);
+        };
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(new Error("Could not save the space."));
         transaction.onabort = () => reject(new Error("Saving the space was interrupted."));

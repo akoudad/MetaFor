@@ -177,6 +177,63 @@ test("retained user requests remain bounded with escaping and deep history", () 
   assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
 });
 
+test("synthesis follow-ups retain off-path contributors and their local requirements", () => {
+  const conversation = createConversation();
+  conversation.explorations.root.messages = [{ id: "overview", role: "assistant", sections: [{ id: "overview-body", title: "Overview", body: "Explore the available approaches." }] }];
+  for (let index = 0; index < 40; index += 1) {
+    const id = `subject-${index}`;
+    conversation.explorations[id] = { id, title: `Approach ${index}`, summary: `Details of approach ${index}.`, parentId: "root", source: null, position: [0, 0, 0], messages: [
+      { id: `requirement-${index}`, role: "user", sections: [{ id: `requirement-text-${index}`, title: "", body: "Keep this configuration unchanged." }] },
+      { id: `answer-${index}`, role: "assistant", sections: [{ id: `section-${index}`, title: "Details", body: `INPUT_DECISION_${index}: preserve this configuration.` }] },
+    ] };
+  }
+  conversation.connections = [38, 39].map((index) => ({ id: `contributor-${index}`, from: `subject-${index}`, to: "subject-0", type: "synthesis", status: "accepted", reason: "Contributes to the combined approach." }));
+  const request: AnswerRequest = { requestId: "follow-combination", conversation, activeId: "subject-0", question: "How would this work?", selection: null, mode: "auto", includeIds: [] };
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  for (const index of [38, 39]) {
+    assert.ok(context.record.fullIds.includes(`subject-${index}`), "Explicit graph dependencies must not rely on keyword matches or insertion order.");
+    assert.match(JSON.stringify(context.payload.topics), new RegExp(`INPUT_DECISION_${index}`));
+    assert.equal(context.payload.userRequests.find((item) => item.messageId === `requirement-${index}`)?.topicId, `subject-${index}`, "Identical requirements on distinct contributors retain both scopes.");
+  }
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+});
+
+test("long synthesis inputs share the context budget with a deeper follow-up", () => {
+  const conversation = createConversation();
+  for (const id of ["combined", "detail", ...Array.from({ length: 8 }, (_, index) => `input-${index}`)]) {
+    conversation.explorations[id] = { id, title: id, summary: "An independently explored subject.", parentId: id === "detail" ? "combined" : "root", source: null, position: [0, 0, 0], messages: [
+      { id: `${id}-question`, role: "user", sections: [{ id: `${id}-request`, title: "", body: `Preserve the requirements for ${id}.` }] },
+      { id: `${id}-answer`, role: "assistant", sections: [{ id: `${id}-body`, title: "Details", body: '"\\\n'.repeat(4000) + `LATEST_${id}` }] },
+    ] };
+  }
+  conversation.connections = Array.from({ length: 8 }, (_, index) => ({ id: `connection-${index}`, from: `input-${index}`, to: "combined", type: "synthesis", status: "accepted", reason: "Contributes to the combined approach." }));
+  const request: AnswerRequest = { requestId: "deeper-combination", conversation, activeId: "detail", question: "How does this affect it?", selection: null, mode: "auto", includeIds: [] };
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  for (const id of ["detail", ...conversation.connections.map((edge) => edge.from)]) {
+    const topic = context.payload.topics.find((item) => item.id === id);
+    assert.ok(topic?.messages.length, `The context must reserve readable content for ${id}.`);
+    assert.match(JSON.stringify(topic.messages), new RegExp(`LATEST_${id}`));
+  }
+  assert.ok(context.record.truncated);
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+});
+
+test("repeated user wording retains local scope and later corrections", () => {
+  const request = input();
+  const root = request.conversation.explorations[request.conversation.rootId];
+  root.messages.push(
+    { id: "choose-first", role: "user", sections: [{ id: "choose-first-text", title: "", body: "Use the first option." }] },
+    { id: "choose-second", role: "user", sections: [{ id: "choose-second-text", title: "", body: "Use the second option instead." }] },
+    { id: "restore-first", role: "user", sections: [{ id: "restore-first-text", title: "", body: "Use the first option." }] },
+  );
+  const topic = request.conversation.explorations[request.activeId];
+  topic.messages.push({ id: "local-repeated-question", role: "user", sections: [{ id: "local-repeated-question-text", title: "", body: root.messages[0].sections[0].body }] });
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  assert.deepEqual(context.payload.userRequests.filter((item) => ["choose-first", "choose-second", "restore-first"].includes(item.messageId)).map((item) => item.messageId), ["choose-first", "choose-second", "restore-first"]);
+  assert.equal(context.payload.userRequests.find((item) => item.messageId === "local-repeated-question")?.topicId, request.activeId);
+  assert.ok(!context.payload.userRequests.some((item) => item.messageId === root.messages[0].id), "The root prompt is already retained separately.");
+});
+
 test("selected clarification sources survive as anchors on later questions in the same topic", () => {
   const request = input();
   const topic = request.conversation.explorations.compensation;
@@ -260,6 +317,19 @@ test("provider errors and malformed/truncated output never expose raw upstream c
   }
 });
 
+test("rejected upstream responses close unread bodies", async () => {
+  for (const kind of ["status", "oversized", "encoding"] as const) {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { if (kind === "encoding") controller.enqueue(new Uint8Array([0xff])); },
+      cancel() { cancelled = true; },
+    });
+    const response = new Response(body, { status: kind === "status" ? 503 : 200, headers: kind === "oversized" ? { "content-length": String(512 * 1024 + 1) } : {} });
+    await assert.rejects(generateAnswer(input(), { env: testEnv, fetch: async () => response }), AnswerError);
+    assert.equal(cancelled, true, `${kind} failures must release the provider's response stream.`);
+  }
+});
+
 test("timeouts and user cancellation abort the upstream request", async () => {
   const hangingFetch: typeof fetch = async (_url, init) => new Promise((_resolve, reject) => {
     init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
@@ -337,6 +407,46 @@ test("a stalled upload times out and an aborted upload closes its reader", async
   controller.abort();
   assert.equal((await pending).status, 499);
   assert.equal(cancelled, 2);
+});
+
+test("the route deadline includes upload time and aborts the provider without leaking its slot", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  let upstreamAborted = false;
+  let enteredProvider!: () => void;
+  const entered = new Promise<void>((resolve) => { enteredProvider = resolve; });
+  const handler = createAnswerHandler({ env: testEnv, timeoutMs: 60, bodyTimeoutMs: 30, fetch: async (_url, init) => {
+    calls += 1;
+    if (calls > 1) return successfulCompletion(init);
+    enteredProvider();
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => { upstreamAborted = true; reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    });
+  } });
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) { setTimeout(() => { controller.enqueue(new TextEncoder().encode(JSON.stringify(input()))); controller.close(); }, 20); },
+  });
+  const pending = handler(streamedRequest(body));
+  t.mock.timers.tick(20);
+  await entered;
+  t.mock.timers.tick(40);
+  assert.equal(upstreamAborted, true, "The upload and model must share one route deadline.");
+  const response = await pending;
+  assert.equal(response.status, 504);
+  assert.equal((await response.json()).code, "request_timeout");
+  assert.equal((await handler(httpRequest())).status, 200, "A timeout must release the same client's concurrency slot.");
+});
+
+test("successful routes remove their deadline and abort listeners", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const signals: AbortSignal[] = [];
+  const controller = new AbortController();
+  const handler = createAnswerHandler({ env: testEnv, timeoutMs: 60, fetch: async (_url, init) => { signals.push(init!.signal!); return successfulCompletion(init); } });
+  const body = new ReadableStream<Uint8Array>({ start(stream) { stream.enqueue(new TextEncoder().encode(JSON.stringify(input()))); stream.close(); } });
+  assert.equal((await handler(streamedRequest(body, controller.signal))).status, 200);
+  controller.abort();
+  t.mock.timers.tick(100);
+  assert.ok(signals.every((signal) => !signal.aborted), "Completed upstream calls must be detached from both client cancellation and route timers.");
 });
 
 test("provider timeout also covers a stalled JSON response after headers arrive", async () => {

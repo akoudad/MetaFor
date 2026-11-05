@@ -96,12 +96,14 @@ export default function ConversationSpace() {
   const [unreadId, setUnreadId] = useState<string | null>(null);
   const [unreadMessageId, setUnreadMessageId] = useState<string | null>(null);
   const unreadTopics = useRef<string[]>([]);
+  const unreadTargets = useRef(new Map<string, string>());
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [statusError, setStatusError] = useState("");
   const [accessCode, setAccessCode] = useState("");
   const [showAccess, setShowAccess] = useState(false);
   const [saveState, setSaveState] = useState("Saved locally");
   const [library, setLibrary] = useState<{ id: string; title: string; savedAt: string }[]>([]);
+  const [libraryWarning, setLibraryWarning] = useState("");
   const [scrollRevision, setScrollRevision] = useState(0);
   const stage = useRef<HTMLDivElement>(null);
   const spatialScroll = useRef<SpatialScrollState | null>(null);
@@ -134,6 +136,8 @@ export default function ConversationSpace() {
     answerFocusFrame.current = null;
   }, []);
   const active = space.explorations[activeId] ?? space.explorations[space.rootId];
+  const parent = active.parentId ? space.explorations[active.parentId] : null;
+  const childCount = Object.values(space.explorations).filter((item) => item.parentId === active.id).length;
   const path = getPath(space, active.id);
   const links = useMemo(() => [
     ...Object.values(space.explorations).filter((item) => item.parentId).map((item) => ({ from: item.parentId!, to: item.id, type: "origin" as const })),
@@ -192,7 +196,7 @@ export default function ConversationSpace() {
     markInteraction();
     setChoiceParent(null); setAnnotationPair(null);
     setPending(null); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = [];
-    answerTargets.current.clear();
+    answerTargets.current.clear(); unreadTargets.current.clear();
     saved.current = next.view.places;
     history.current = next.view.history;
     let camera = next.view.view;
@@ -238,7 +242,8 @@ export default function ConversationSpace() {
     let cancelled = false;
     // Keep older demo snapshots in the library, but never present one as a new
     // user's conversation. Real saved chats still resume normally.
-    loadSnapshot().then((value) => { if (!cancelled && value && value.conversation.kind !== "sample") restore(value); }).catch((error) => { if (!cancelled) setNotice(error instanceof Error ? error.message : "Could not restore the saved conversation."); }).finally(() => { if (!cancelled) setReady(true); });
+    let warning = "";
+    loadSnapshot(undefined, (message) => { warning = message; }).then((value) => { if (cancelled) return; if (value && value.conversation.kind !== "sample") restore(value); if (warning) setNotice(warning); }).catch((error) => { if (!cancelled) setNotice(error instanceof Error ? error.message : "Could not restore the saved conversation."); }).finally(() => { if (!cancelled) setReady(true); });
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(query.matches);
     update(); query.addEventListener("change", update);
@@ -257,12 +262,14 @@ export default function ConversationSpace() {
   useEffect(() => {
     if (!ready || (!started && !draft && !annotations.length)) return;
     setSaveState("Saving…");
+    let cancelled = false;
     const timer = setTimeout(() => {
-      saveSnapshot(snapshotNow.current()).then(() => setSaveState("Saved locally")).catch((error) => {
+      saveSnapshot(snapshotNow.current()).then(() => { if (!cancelled) setSaveState("Saved locally"); }).catch((error) => {
+        if (cancelled) return;
         setSaveState("Save failed"); setNotice(error instanceof Error ? error.message : "Could not save. Export an .ingx copy to keep your work.");
       });
     }, 500);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [ready, space, view, activeId, draft, selection, annotations, positions, overview, started, scrollRevision, pending]);
 
   useEffect(() => {
@@ -279,7 +286,8 @@ export default function ConversationSpace() {
   useEffect(() => {
     if (!savedChats) return;
     let cancelled = false;
-    listSnapshots().then((items) => { if (!cancelled) setLibrary(items); }).catch(() => { if (!cancelled) setNotice("Could not read saved chats. Your current chat is still open."); });
+    setLibraryWarning("");
+    listSnapshots((message) => { if (!cancelled) setLibraryWarning(message); }).then((items) => { if (!cancelled) setLibrary(items); }).catch((error) => { if (!cancelled) setLibraryWarning(error instanceof Error ? error.message : "Could not read saved chats. Your current chat is still open."); });
     return () => { cancelled = true; };
   }, [savedChats, saveState]);
 
@@ -323,9 +331,12 @@ export default function ConversationSpace() {
     setCamera(frame?.view ?? focusView(point, width, height));
     activeNow.current = id; setActiveId(id);
     setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setAnnotations(previous?.annotations ?? []);
-    setIncludeIds([]); setStarted(true); setOverview(false); setNotice(""); setUnreadId(null);
+    setIncludeIds([]); setStarted(true); setOverview(false); setNotice("");
+    if ((!unreadTopics.current.length && unreadId === id) || (unreadTopics.current.length === 1 && unreadTopics.current[0] === id)) {
+      setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = [];
+    }
     hover.current = id; wheelAnchor.current = null; revealNewAnswer(id);
-  }, [activeId, pointFor, remember, space, nodes, revealNewAnswer]);
+  }, [activeId, pointFor, remember, space, nodes, revealNewAnswer, unreadId]);
 
   const showOverview = useCallback(() => {
     if (switchingNow.current || overview) return;
@@ -499,7 +510,7 @@ export default function ConversationSpace() {
       if (event.defaultPrevented || switchingNow.current) return;
       if (event.key === "Escape") {
         if (selectionPreview) { event.preventDefault(); dismissSelectionPreview(); return; }
-        if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); }
+        if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); if (showAccess) composer.current?.focus(); }
         else if (choiceNow.current) resumeTopic(choiceNow.current);
         else if (["TEXTAREA", "INPUT"].includes(target.tagName)) { target.blur(); }
         else if (started) back();
@@ -653,7 +664,7 @@ export default function ConversationSpace() {
     abort.current?.abort();
     const controller = new AbortController(); abort.current = controller;
     setPending({ ...task, error: undefined }); setNotice("");
-    unreadTopics.current = []; setUnreadId(null); setUnreadMessageId(null);
+    unreadTopics.current = []; unreadTargets.current.clear(); setUnreadId(null); setUnreadMessageId(null);
     try {
       const response = await fetch("/api/answer", { method: "POST", headers: { "Content-Type": "application/json", ...(accessCode ? { "x-demo-code": accessCode } : {}) }, body: JSON.stringify(task.request), signal: controller.signal });
       const payload = await response.json().catch(() => null);
@@ -697,29 +708,40 @@ export default function ConversationSpace() {
           if (newTopicIds.length) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: newTopicIds[0], toIds: newTopicIds, follow: true });
         }
         else setCamera(focusView(destination.position, size().width, size().height));
-        if (!task.request.selection && !task.request.annotations?.length) requestAnimationFrame(() => {
-          const reader = readers.current.get(applied.destinationId);
-          const answer = reader?.querySelector<HTMLElement>(`[data-message-id="answer-${CSS.escape(task.request.requestId)}"]`);
-          if (reader && answer) {
-            const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
-            reader.scrollTop += (answer.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 16;
-          }
-        });
+        if (!topicIds.length && !task.request.selection && !task.request.annotations?.length) {
+          answerTargets.current.set(applied.destinationId, `answer-${task.request.requestId}`);
+          revealNewAnswer(applied.destinationId);
+        }
       } else {
         if (newTopicIds.length) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: newTopicIds[0], toIds: newTopicIds, follow: false });
+        unreadTargets.current = new Map(topicIds.map((id, index) => [id, `topic-answer-${task.request.requestId}-${index}`]));
         unreadTopics.current = topicIds; setUnreadId(applied.destinationId); setUnreadMessageId(`answer-${task.request.requestId}`); setNotice(topicIds.length ? `Your answer is ready in ${topicIds.length} ${topicIds.length === 1 ? "topic" : "topics"}.` : "Your answer is ready.");
       }
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : "The request failed. Your question is preserved.";
-      unreadTopics.current = [];
+      unreadTopics.current = []; unreadTargets.current.clear();
       setPending({ ...task, error: message });
       if (activeNow.current !== task.request.activeId) { setNotice("The question in another topic needs a retry."); setUnreadId(task.request.activeId); setUnreadMessageId(null); }
     }
   };
 
   const showAnswerTopics = (conversation: Conversation, originId: string, topicIds: string[]) => {
-    setTransition(null); setAnnotationPair(null); setChoiceParent(originId, topicIds); setOverview(false);
+    setTransition(null); setAnnotationPair(null); setOverview(false);
+    // A single destination is an answer to read, not a fork to choose from.
+    if (topicIds.length === 1) {
+      const id = topicIds[0];
+      if (activeNow.current !== id) pushHistory(activeNow.current);
+      activeNow.current = id; setActiveId(id); setChoiceParent(null);
+      setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setAnnotations(saved.current[id]?.annotations ?? []);
+      setIncludeIds([]); setStarted(true);
+      const node = layoutSpace(conversation, positions).find((item) => item.id === id)!;
+      setCamera(focusView(node.position, size().width, size().height));
+      revealNewAnswer(id);
+      hover.current = null; wheelAnchor.current = null;
+      return;
+    }
+    setChoiceParent(originId, topicIds);
     const ids = new Set([originId, ...topicIds.flatMap((id) => getPath(conversation, id).map((item) => item.id)), ...(conversation.connections ?? []).filter((link) => link.type === "synthesis" && topicIds.includes(link.to)).map((link) => link.from)]);
     const laidOut = layoutSpace(conversation, positions);
     setCamera(fitOverview(laidOut.filter((node) => ids.has(node.id)), size().width, size().height));
@@ -755,14 +777,18 @@ export default function ConversationSpace() {
     if (!started) setCamera(focusView(pointFor(originId), size().width, size().height));
     void runRequest({ request, navigation: navigation.current });
     // Preserve the source passage while a scoped answer is being generated.
-    if (!source && !batch.length) requestAnimationFrame(() => { const reader = readers.current.get(originId); if (reader) reader.scrollTop = reader.scrollHeight; });
+    const generation = navigation.current;
+    if (!source && !batch.length) requestAnimationFrame(() => {
+      if (navigation.current !== generation || activeNow.current !== originId || pendingNow.current?.request.requestId !== request.requestId) return;
+      const reader = readers.current.get(originId); if (reader) reader.scrollTop = reader.scrollHeight;
+    });
   };
   const cancel = () => {
     abort.current?.abort();
     const task = pendingNow.current;
     if (task) setPending({ ...task, error: "Stopped. Retry when you’re ready." });
   };
-  const dismissPending = () => { abort.current?.abort(); setPending(null); setNotice(""); };
+  const dismissPending = () => { abort.current?.abort(); setPending(null); setNotice(""); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = []; unreadTargets.current.clear(); };
   const composerKeydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
   };
@@ -793,7 +819,7 @@ export default function ConversationSpace() {
   const openSaved = async (id: string) => {
     if (!ready || switchingNow.current || (pending && !pending.error)) return;
     switchingNow.current = true; setSwitching(true);
-    try { await keepCurrent(); const value = await loadSnapshot(id); if (!value) throw new Error("That saved conversation is no longer available."); restore(value); }
+    try { await keepCurrent(); let warning = ""; const value = await loadSnapshot(id, (message) => { warning = message; }); if (!value) throw new Error("That saved conversation is no longer available."); restore(value); if (warning) setNotice(warning); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Could not open this conversation."); }
     finally { switchingNow.current = false; setSwitching(false); }
   };
@@ -802,17 +828,17 @@ export default function ConversationSpace() {
     const id = unreadId;
     const messageId = unreadMessageId;
     const topicIds = unreadTopics.current;
-    focus(id);
+    // One answer goes straight from the reader's current place to its actual
+    // destination. Its origin was not visited and must not become a Back step.
+    if (topicIds.length === 1) { remember(); markInteraction(); }
+    else focus(id);
+    // Explicitly opening an answer restores its targets even if reading or
+    // visiting its topic already cancelled automatic following.
+    for (const [topicId, target] of unreadTargets.current) answerTargets.current.set(topicId, target);
+    unreadTargets.current.clear();
+    setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = []; setNotice("");
     if (topicIds.length) { showAnswerTopics(spaceNow.current, id, topicIds); unreadTopics.current = []; return; }
-    requestAnimationFrame(() => {
-      const reader = readers.current.get(id);
-      if (!reader) return;
-      const answer = messageId && reader.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
-      if (answer) {
-        const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
-        reader.scrollTop += (answer.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 16;
-      } else reader.scrollTop = reader.scrollHeight;
-    });
+    if (messageId) { answerTargets.current.set(id, messageId); revealNewAnswer(id); }
   };
   const exportFile = () => {
     try {
@@ -903,6 +929,7 @@ export default function ConversationSpace() {
     {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
       <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
       <p className="panel-explainer">Saved in this browser.</p>
+      {libraryWarning && <p className="panel-explainer" role="status">{libraryWarning}</p>}
       <div className="saved-spaces">{library.length ? library.map((item) => <button key={item.id} onClick={() => void openSaved(item.id)} disabled={switching || Boolean(pending && !pending.error)} aria-current={item.id === space.id ? "page" : undefined}>{item.title}<small>{new Date(item.savedAt).toLocaleDateString()}</small></button>) : <p>No saved chats yet.</p>}</div>
     </aside>}
     {menu && <aside className="space-menu" aria-label="Conversation actions">
@@ -912,7 +939,7 @@ export default function ConversationSpace() {
       <div className="menu-rule" />
       <button onClick={() => fileInput.current?.click()} disabled={Boolean(pending && !pending.error)}>Open .ingx</button>
       <button onClick={exportFile} disabled={!started && !draft}>Export .ingx</button>
-      <div className="menu-rule" /><p className="model-status">{statusError || (modelStatus?.configured ? `${modelStatus.model} connected` : "Add MODEL_API_KEY in .env.local to connect Meta.")}</p><button onClick={() => void refreshStatus()}>Check connection</button>
+      <div className="menu-rule" /><p className="model-status">{statusError || (modelStatus?.configured ? `${modelStatus.model} configured` : "Add MODEL_API_KEY in .env.local to connect Meta.")}</p><button onClick={() => void refreshStatus()}>Check connection</button>
       {modelStatus?.accessCodeRequired && <button onClick={() => { setShowAccess(true); setMenu(false); }}>Demo access code</button>}
     </aside>}
     {connections && <aside className="connections-panel"><div className="panel-heading"><span>Connections</span><button onClick={() => setConnections(false)} aria-label="Close connections">×</button></div><p className="panel-explainer">Arrows show where a discussion began. Related topics can be included in your next question.</p>
@@ -936,12 +963,15 @@ export default function ConversationSpace() {
       {!started && <div className="welcome"><h1>What’s on your mind?</h1></div>}
     </div>
     {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { chooseSection(selectionPreview.source); window.getSelection()?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
-    {(scrollHint || choiceParentId) && <p className="scroll-boundary-hint" role="status">{scrollHint || `${choices.length} topics · Choose a title to explore · Scroll up to return`}</p>}
+    {started && <nav className="exploration-controls" aria-label="Topic depth navigation">
+      {overview ? <><span>Conversation overview · {nodes.length} topics</span><button onClick={() => resumeTopic(activeId)} aria-label={`Return to reading ${active.title}`}>Return to {active.title} ↗</button><span className="exploration-instruction">Choose any title to read</span></> : choiceParentId ? <><button onClick={() => resumeTopic(choiceParentId)} aria-label={`Read parent topic ${space.explorations[choiceParentId].title}`}>↑ {space.explorations[choiceParentId].title}</button><span>{choices.length} topics · Choose a title to read</span></> : <><button onClick={() => parent ? resumeTopic(parent.id) : showOverview()} aria-label={parent ? `Up to parent ${parent.title}` : "Up to conversation overview"}>↑ {parent?.title ?? "Overview"}</button>{childCount > 0 && <button onClick={() => exploreChildren(activeId)} aria-label={`Explore ${childCount} deeper ${childCount === 1 ? "topic" : "topics"}`}>Explore {childCount} {childCount === 1 ? "topic" : "topics"} ↓</button>}</>}
+      {scrollHint && <span role="status">{scrollHint}</span>}
+    </nav>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
     {started && <SpaceMap nodes={presentedNodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
     <div className="composer-dock">
-      {notice && <p className="composer-notice" role="status">{notice}{unreadId && <button onClick={openUnread}>Open answer ↗</button>}<button onClick={() => setNotice("")} aria-label="Dismiss notice">×</button></p>}
+      {(notice || unreadId) && <p className="composer-notice" role="status">{notice || (pending?.error ? "An unfinished question needs your attention." : `Your answer is ready${unreadTopics.current.length ? ` in ${unreadTopics.current.length} ${unreadTopics.current.length === 1 ? "topic" : "topics"}` : ""}.`)}{unreadId && <button onClick={openUnread}>Open answer ↗</button>}<button onClick={() => { setNotice(""); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = []; }} aria-label="Dismiss notice">×</button></p>}
       {annotations.length > 0 && <section className="annotation-queue" aria-label="Queued annotations">
         <div className="annotation-queue-heading"><span>{annotations.length} {annotations.length === 1 ? "annotation" : "annotations"} ready</span><span>Select another passage to add</span></div>
         <div className="annotation-queue-list">{annotations.map((item, index) => <div className="annotation-draft" key={item.id}>
@@ -954,10 +984,17 @@ export default function ConversationSpace() {
       {selection && <div className="selection-chip"><span>About</span><p>{selectionLabel || "Selected section"}</p><button onClick={() => { markInteraction(); setSelection(null); }} aria-label="Clear selected passage">×</button></div>}
       {selection && draft.trim() && <button className="queue-annotation" onClick={() => { markInteraction(); if (queueAnnotation()) setNotice("Select another passage, or send your annotation now."); }}>Add another annotation +</button>}
       {pending && !pending.error && <div className="generation-status"><span role="status" aria-live="polite">Thinking…</span><button type="button" onClick={cancel} aria-label="Stop generating">Stop</button></div>}
-      {started && <div className="composer-context"><span>{active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
+      {pending?.error && <div className="request-recovery" role="status"><span>Question paused</span><button type="button" onClick={() => focus(pending.request.activeId)}>View question</button><button type="button" onClick={() => void runRequest(pending)} aria-label="Retry unfinished question">Retry</button><button type="button" onClick={dismissPending} aria-label="Dismiss unfinished question">Dismiss</button></div>}
+      {started && <div className="composer-context"><span>Asking about: {active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
       <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={draft} onChange={(event) => { markInteraction(); setDraft(event.target.value); }} onKeyDown={composerKeydown} aria-label="Your question" placeholder={selection ? "Ask about this passage" : annotations.length ? "Optional instructions for these annotations" : "Ask anything"} rows={1} maxLength={8000} disabled={!ready || switching} />{draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
     </div>
-    {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onSubmit={(event) => { event.preventDefault(); setShowAccess(false); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => setShowAccess(false)} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}
+    {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onKeyDown={(event) => {
+      if (event.key !== "Tab") return;
+      const fields = Array.from(event.currentTarget.elements).filter((field): field is HTMLElement => field instanceof HTMLElement && field.tabIndex >= 0 && !field.matches(":disabled"));
+      const first = fields[0], last = fields.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }} onSubmit={(event) => { event.preventDefault(); setShowAccess(false); composer.current?.focus(); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => { setShowAccess(false); composer.current?.focus(); }} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}
     {switching && <div className="workspace-transition" role="status">Opening conversation…</div>}
     <footer className="navigation-hint"><span>{started ? "INSIDE: SCROLL TO READ · SPACE: SCROLL TO EXPLORE · PINCH TO ZOOM" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
     <span className="sr-only" role="status" aria-live="polite">{started ? `${active.title}, depth ${getDepth(space, active.id)}${overview ? ", overview" : ""}` : "Ready for your question"}</span>

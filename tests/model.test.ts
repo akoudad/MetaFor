@@ -103,6 +103,31 @@ test("parent cycles cannot trap path traversal", () => {
   assert.throws(() => validateConversation(space), /parent cycle/);
 });
 
+test("message provenance rejects self references, future answers, and circular source chains", () => {
+  const reference = (explorationId: string, messageId: string, sectionId: string) => ({ explorationId, messageId, sectionId });
+  const self = createSampleConversation();
+  self.explorations.compensation.messages[1].source = reference("compensation", "compensation-answer", "compensation-package");
+  assert.throws(() => validateConversation(self), /earlier answer/);
+  const future = createSampleConversation();
+  future.explorations.compensation.messages[0].source = reference("compensation", "compensation-answer", "compensation-package");
+  assert.throws(() => validateConversation(future), /earlier answer/);
+  const cycle = createSampleConversation();
+  cycle.explorations.compensation.messages[1].source = reference("equity", "equity-answer", "equity-instrument");
+  cycle.explorations.equity.messages[1].source = reference("compensation", "compensation-answer", "compensation-package");
+  assert.throws(() => validateConversation(cycle), /source cycle/);
+});
+
+test("later messages can revisit a topic without creating circular provenance", () => {
+  const space = createSampleConversation();
+  space.explorations.equity.messages[1].source = { explorationId: "compensation", messageId: "compensation-answer", sectionId: "compensation-package" };
+  space.explorations.compensation.messages.push({
+    id: "compensation-revisited", role: "assistant",
+    source: { explorationId: "equity", messageId: "equity-answer", sectionId: "equity-instrument" },
+    sections: [{ id: "compensation-new-comparison", title: "Comparison", body: "A later comparison draws on the existing equity answer." }],
+  });
+  assert.doesNotThrow(() => validateConversation(space));
+});
+
 test("invalid IDs and detached roots do not produce misleading paths", () => {
   const space = createSampleConversation();
   assert.throws(() => getPath(space, "missing"), /does not exist/);

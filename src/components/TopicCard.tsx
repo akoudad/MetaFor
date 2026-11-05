@@ -63,7 +63,7 @@ export default function TopicCard(props: TopicCardProps) {
   return <article className={`topic ${active ? "is-focused" : ""}`} data-topic={item.id} aria-label={item.title} onPointerEnter={() => props.onHover(item.id)} onPointerLeave={() => props.onHover(null)}>
     <div className="topic-header">
       <span className="topic-index">{String(getDepth(space, item.id)).padStart(2, "0")}</span>
-      <h2><button data-graph-choice={props.graphChoice || undefined} onClick={props.onFocus} aria-label={`Enter ${item.title}`}>{item.title}</button></h2>
+      <h2><button data-graph-choice={props.graphChoice || undefined} onClick={props.onFocus} aria-label={`Enter ${item.title}`} aria-current={active ? "location" : undefined}>{item.title}</button></h2>
       <button className="topic-move" data-move-topic={item.id} aria-label={`Move ${item.title}`} title="Drag to move this topic">⠿</button>
       <button className="topic-enter" onClick={props.onFocus} aria-label={`Focus ${item.title}`}>↗</button>
     </div>
@@ -85,9 +85,9 @@ export default function TopicCard(props: TopicCardProps) {
             {section.title && <h3><span>{section.title}</span><button className="section-ask" aria-label={`Ask about ${section.title}`} data-no-selection onClick={() => props.onSelect({ explorationId: item.id, messageId: message.id, sectionId: section.id })}>↗</button></h3>}
             {props.annotations?.map((annotation, index) => annotation.source.explorationId === item.id && annotation.source.messageId === message.id && annotation.source.sectionId === section.id ? <span key={annotation.id} className="source-annotation-marker" data-no-selection title={annotation.question}>[{index + 1}]</span> : null)}
             <AnswerBody text={section.body} />
+            {getSectionChildren(space, section.id).map((child) => <button className="branch-link" key={child.id} data-no-selection onClick={() => props.onOpen(child.id)}>{child.title} <span>↗</span></button>)}
           </section>)}
         </div>
-        {Array.from(new Map(message.sections.flatMap((section) => getSectionChildren(space, section.id)).map((child) => [child.id, child])).values()).map((child) => <button className="branch-link" key={child.id} onClick={() => props.onOpen(child.id)}>{child.title} <span>↗</span></button>)}
         {metadata(message)}
       </div>)}
       {props.pendingQuestion && <div className="pending-answer" role="status">

@@ -32,6 +32,18 @@ export function projectMapPoint(point: SpatialPoint, projection: MapProjection):
   } : null;
 }
 
+/** Overlapping hit areas must select the closest dot, not the last painted SVG group. */
+export function nearestMapNode(point: MapPoint, projection: MapProjection, radius = 8): MapNode | null {
+  if (![point.x, point.y, radius].every(Number.isFinite) || radius < 0) return null;
+  let nearest: MapNode | null = null;
+  let distance = radius * radius;
+  for (const node of projection.nodes) {
+    const candidate = (node.x - point.x) ** 2 + (node.y - point.y) ** 2;
+    if (candidate <= distance) { nearest = node; distance = candidate; }
+  }
+  return nearest;
+}
+
 /** Fit actual topic centers, independent of the main camera's zoom or position. */
 export function projectSpaceMap(nodes: SpatialNode[], width = MAP_WIDTH, height = MAP_HEIGHT): MapProjection {
   const dimension = (value: number, fallback: number) => Number.isFinite(value) ? Math.max(80, Math.min(2048, value)) : fallback;

@@ -129,7 +129,8 @@ export function buildAnswerContext(request: AnswerRequest, limit = MAX_CONTEXT_C
   const { conversation: space, activeId, selection, includeIds } = request;
   const annotations = validateAnnotations(request.annotations, space);
   const root = space.explorations[space.rootId];
-  const originalQuestion = root.messages.find((message) => message.role === "user")?.sections.map((section) => section.body).join("\n") ?? "";
+  const originalMessage = root.messages.find((message) => message.role === "user");
+  const originalQuestion = originalMessage?.sections.map((section) => section.body).join("\n") ?? "";
   const passage = selection ? selectedText(space, selection) : null;
   const payload = {
     activeId,
@@ -149,13 +150,18 @@ export function buildAnswerContext(request: AnswerRequest, limit = MAX_CONTEXT_C
   if (JSON.stringify(payload).length > limit - 4000) throw new AnswerError("selection_too_large", "That passage is too large to include reliably. Select a smaller part of the answer.", 413);
   const annotationPaths = annotations.flatMap((item) => getPath(space, item.source.explorationId).reverse());
   const path = [...new Map([...annotationPaths, ...getPath(space, activeId).reverse()].map((topic) => [topic.id, topic])).values()];
+  // Accepted synthesis links are explicit dependencies, even when a follow-up
+  // contains no searchable subject words. Bound one-hop expansion of the path.
+  const contributingIds = [...new Set([...path.map((topic) => topic.id), ...includeIds].flatMap((id) => existingSynthesisSources(space, id)))].filter((id) => !path.some((topic) => topic.id === id) && !includeIds.includes(id));
+  const dependencyIds = contributingIds.slice(0, 16);
+  record.truncated ||= contributingIds.length > dependencyIds.length;
   const ranked = relevantTopics(space, [request.question, passage ?? "", ...annotations.flatMap((item) => [item.question, selectedText(space, item.source)])].join("\n"));
-  const retrievedIds = ranked.filter((item) => item.score > 0 && !path.some((topic) => topic.id === item.topic.id) && !includeIds.includes(item.topic.id)).slice(0, 3).map((item) => item.topic.id);
+  const retrievedIds = ranked.filter((item) => item.score > 0 && !path.some((topic) => topic.id === item.topic.id) && !includeIds.includes(item.topic.id) && !dependencyIds.includes(item.topic.id)).slice(0, 3).map((item) => item.topic.id);
   // User constraints must not disappear merely because assistant answers are long.
   // Keep the original wording and order; the model interprets scope and corrections.
   const requestsStart = JSON.stringify(payload).length;
   const requestsBudget = Math.min(12000, Math.max(0, limit - requestsStart - 16000));
-  const requestTopics = [...new Map([...path].reverse().concat([...includeIds, ...retrievedIds].map((id) => space.explorations[id])).map((topic) => [topic.id, topic])).values()];
+  const requestTopics = [...new Map([...path].reverse().concat([...includeIds, ...dependencyIds, ...retrievedIds].map((id) => space.explorations[id])).map((topic) => [topic.id, topic])).values()];
   const requestOrder = new Map<string, number>();
   const requestQueues = requestTopics.map((topic) => {
     const messages = topic.messages.filter((message) => message.role === "user");
@@ -168,14 +174,14 @@ export function buildAnswerContext(request: AnswerRequest, limit = MAX_CONTEXT_C
     }
     return { topic, messages: queue };
   });
-  const seenRequests = new Set<string>();
   for (let round = 0; requestQueues.some((queue) => queue.messages[round]); round += 1) {
     for (const { topic, messages } of requestQueues) {
       const message = messages[round];
       if (!message) continue;
       const original = message.sections.map((section) => section.body).join("\n");
-      if (!original.trim() || seenRequests.has(original) || original === originalQuestion) continue;
-      seenRequests.add(original);
+      // The same words can constrain different topics or reaffirm an earlier
+      // choice after a correction. Only the separately stored root prompt repeats.
+      if (!original.trim() || message.id === originalMessage?.id) continue;
       const remaining = requestsBudget - (JSON.stringify(payload).length - requestsStart) - 2;
       if (remaining < 400) { record.truncated = true; continue; }
       let entry = { topicId: topic.id, messageId: message.id, text: original.slice(0, Math.min(3000, remaining - 250)), truncated: original.length > Math.min(3000, remaining - 250) };
@@ -191,7 +197,7 @@ export function buildAnswerContext(request: AnswerRequest, limit = MAX_CONTEXT_C
   const seenSources = new Set<string>([...(selection ? [JSON.stringify(selection)] : []), ...annotations.map((item) => JSON.stringify(item.source))]);
   // A branch's exact source can be much older than its parent's recent tail.
   // Reserve source text first, then fill the remaining budget with recent chat.
-  for (const topic of path) {
+  for (const topic of [...path, ...dependencyIds.map((id) => space.explorations[id])]) {
     const recentSource = [...topic.messages].reverse().find((message) => message.source)?.source;
     for (const source of [recentSource, topic.source]) {
       if (!source) continue;
@@ -219,12 +225,15 @@ export function buildAnswerContext(request: AnswerRequest, limit = MAX_CONTEXT_C
   }
   const children = Object.values(space.explorations).filter((topic) => topic.parentId === activeId);
   const annotationIds = annotations.map((item) => item.source.explorationId);
-  const priorities = [...new Set([...annotationIds, activeId, ...includeIds, ...path.map((topic) => topic.id), ...retrievedIds, ...children.slice(0, 8).map((topic) => topic.id)])];
+  const requiredIds = new Set([...annotationIds, activeId, ...includeIds, ...dependencyIds]);
+  const priorities = [...new Set([...requiredIds, ...path.map((topic) => topic.id), ...retrievedIds, ...children.slice(0, 8).map((topic) => topic.id)])];
   record.truncated ||= children.length > 8;
-  for (const id of priorities) {
+  for (const [index, id] of priorities.entries()) {
     const remaining = limit - JSON.stringify(payload).length - 4000;
     if (remaining < 1000) { record.truncated = true; continue; }
-    const excerpt = { ...topicExcerpt(space.explorations[id], Math.min(remaining - 600, annotations.length ? 8000 : id === activeId ? 26000 : includeIds.includes(id) ? 14000 : 8000)), sourceIds: existingSynthesisSources(space, id) };
+    const requiredRemaining = priorities.slice(index).filter((topicId) => requiredIds.has(topicId)).length;
+    const sharedBudget = dependencyIds.length && requiredRemaining > 1 ? Math.max(400, Math.floor(remaining / requiredRemaining) - 600) : remaining - 600;
+    const excerpt = { ...topicExcerpt(space.explorations[id], Math.min(remaining - 600, sharedBudget, annotations.length ? 8000 : id === activeId ? 26000 : includeIds.includes(id) ? 14000 : 8000)), sourceIds: existingSynthesisSources(space, id) };
     if (JSON.stringify(payload).length + JSON.stringify(excerpt).length + 2 > limit - 3000) { record.truncated = true; continue; }
     payload.topics.push(excerpt);
     record.fullIds.push(id);

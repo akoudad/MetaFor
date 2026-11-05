@@ -28,9 +28,9 @@ Local release candidate · 2026-11-05
 
 ## Verification
 
-- The previous pass completed with 185 automated tests, type checking, and a
-  production build passing. Current navigation-update results belong in the
-  [experience review](experience-review.md); prior results do not verify new changes.
+- Latest review findings and verification are in the [deep review](deep-review.md).
+  Earlier results below and in the [experience review](experience-review.md)
+  record prior revisions; they do not verify new changes.
 - Four real app requests (eight `muse-spark-1.3` calls) kept a short city list
   together, created four city guides, placed three briefings in their existing
   city topics, and produced an itinerary with four incoming synthesis links.

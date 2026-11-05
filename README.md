@@ -17,7 +17,9 @@ Scroll inside a topic to read; scroll in empty space to move toward details or
 back toward the overview. Choose a title when the conversation splits.
 **Back** restores your previous reading place. **Conversation map** shows the
 whole shape; hover a dot to see its title and click to jump. Drag topics to arrange
-them, or pinch to zoom. Chats save in your browser. Export `.ingx` to carry the
+them, or pinch to zoom. The controls above the question input show how to return
+to the parent, explore deeper topics, or resume reading from the overview.
+Chats save in your browser. Export `.ingx` to carry the
 conversation, connections, and view state together.
 
 [Demo](docs/demo.md) · [Architecture](docs/architecture.md) ·

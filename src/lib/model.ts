@@ -294,6 +294,7 @@ export function validateConversation(value: unknown): asserts value is Conversat
   if (totalText > CONVERSATION_LIMITS.totalText) throw new Error("The conversation contains too much text to import.");
 
   const typed = value as Conversation;
+  const messageSources = new Map<string, string>();
   for (const exploration of Object.values(typed.explorations)) {
     getPath(typed, exploration.id);
     if (exploration.source) {
@@ -302,9 +303,27 @@ export function validateConversation(value: unknown): asserts value is Conversat
         throw new Error(`Exploration "${exploration.id}" must originate in its navigation parent.`);
       }
     }
-    for (const message of exploration.messages) {
-      if (message.source) validateSourceReference(typed, message.source);
+    for (const [index, message] of exploration.messages.entries()) {
+      if (!message.source) continue;
+      validateSourceReference(typed, message.source);
+      if (message.source.explorationId === exploration.id && exploration.messages.findIndex((item) => item.id === message.source!.messageId) >= index) {
+        throw new Error("A message source must refer to an earlier answer in its topic.");
+      }
+      messageSources.set(message.id, message.source.messageId);
     }
+  }
+  // Topics may revisit each other, but a message cannot depend on itself,
+  // even indirectly through another topic's answer.
+  const checkedSources = new Set<string>();
+  for (const id of messageSources.keys()) {
+    const path = new Set<string>();
+    let current: string | undefined = id;
+    while (current && !checkedSources.has(current)) {
+      if (path.has(current)) throw new Error(`Message source cycle detected at "${current}".`);
+      path.add(current);
+      current = messageSources.get(current);
+    }
+    for (const visited of path) checkedSources.add(visited);
   }
   if (space.connections !== undefined) {
     const connectionIds = new Set<string>();

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, test } from "node:test";
 import { JSDOM } from "jsdom";
+import { projectSpaceMap } from "../src/lib/minimap";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -100,4 +101,35 @@ test("map node titles appear on hover and keyboard focus without navigating", ()
   ui.fireEvent.pointerEnter(source);
   mounted.rerender(<SpaceMap {...props} nodes={[]} />);
   assert.equal(ui.screen.queryByRole("tooltip"), null, "removed nodes cannot leave stale tooltip titles");
+});
+
+test("pointer previews and clicks choose the nearest dot when SVG hit areas overlap", () => {
+  const nodes = [
+    { id: "near", position: { x: 0, y: 0, z: 0 } },
+    { id: "front", position: { x: 20, y: -10, z: -10 } },
+  ];
+  const navigated: string[] = [];
+  ui.render(<SpaceMap nodes={nodes} links={[]} activeId="front" view={{ x: 0, y: 0, z: 900 }} labels={{ near: "Earlier topic", front: "Current topic" }} onNavigate={(id) => navigated.push(id)} onOverview={() => {}} />);
+  const svg = ui.screen.getByRole("group", { name: "Conversation map topics" });
+  Object.defineProperty(svg, "getBoundingClientRect", { value: () => ({ left: 100, top: 200, width: 360, height: 300 }) });
+  const first = projectSpaceMap(nodes).nodes[0];
+  const pointer = { clientX: 100 + first.x * 2, clientY: 220 + first.y * 2, bubbles: true };
+  const overlapping = ui.screen.getByRole("button", { name: "Focus topic: Current topic" });
+  ui.fireEvent(overlapping, new dom.window.MouseEvent("pointermove", pointer));
+  assert.equal(ui.screen.getByRole("tooltip").textContent, "Earlier topic");
+  assert.ok(ui.screen.getByRole("button", { name: "Focus topic: Earlier topic" }).classList.contains("is-preview"));
+  ui.fireEvent.click(overlapping, { ...pointer, detail: 1 });
+  assert.deepEqual(navigated, ["near"], "native paint order must not redirect the chosen topic");
+  assert.equal(document.activeElement, ui.screen.getByRole("button", { name: "Focus topic: Earlier topic" }), "keyboard focus follows the topic actually chosen");
+  ui.fireEvent.click(svg, { clientX: 100, clientY: 200, detail: 1 });
+  assert.deepEqual(navigated, ["near"], "empty map space must not navigate");
+  ui.fireEvent.keyDown(overlapping, { key: "Enter" });
+  assert.deepEqual(navigated, ["near", "front"], "keyboard activation retains its exact focused topic");
+});
+
+test("map button activation still works when geometry is unavailable", () => {
+  const navigated: string[] = [];
+  ui.render(<SpaceMap nodes={[{ id: "topic", position: { x: 0, y: 0, z: 0 } }]} links={[]} activeId="topic" view={{ x: 0, y: 0, z: 900 }} onNavigate={(id) => navigated.push(id)} onOverview={() => {}} />);
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Focus topic: topic" }), { detail: 1 });
+  assert.deepEqual(navigated, ["topic"]);
 });

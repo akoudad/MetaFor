@@ -476,6 +476,168 @@ test("Explore shows graph choices and Back restores the parent reading place", a
   assert.equal(composer.value, "Keep the parent draft");
 });
 
+test("visible depth controls identify the overview and restore the reader after exploring", async () => {
+  const user = await open(fixture());
+  const reader = readerFor("observatory");
+  reader.scrollTop = 315; ui.fireEvent.scroll(reader);
+  const controls = ui.screen.getByRole("navigation", { name: "Topic depth navigation" });
+  await user.click(ui.within(controls).getByRole("button", { name: "Up to conversation overview" }));
+  assert.ok(ui.within(controls).getByText("Conversation overview · 3 topics"));
+  assert.ok(ui.screen.getByRole("button", { name: "Enter Plan an observatory" }).hasAttribute("aria-current"));
+  await user.click(ui.within(controls).getByRole("button", { name: "Return to reading Plan an observatory" }));
+  assert.equal(reader.scrollTop, 315);
+  await user.click(ui.within(controls).getByRole("button", { name: "Explore 2 deeper topics" }));
+  const graph = await choiceGraph();
+  assert.ok(ui.within(controls).getByRole("button", { name: "Read parent topic Plan an observatory" }));
+  await user.click(ui.within(graph).getByRole("button", { name: "Enter Weather records" }));
+  await user.click(ui.within(controls).getByRole("button", { name: "Up to parent Plan an observatory" }));
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(reader.scrollTop, 315);
+  assert.equal(requests.length, 0);
+});
+
+test("one organized answer opens directly without requiring a one-topic choice", async () => {
+  answer = (request) => Response.json({
+    ...result(request, "continue"),
+    topics: [{ targetId: request.activeId, decision: "branch", title: "Roof materials", summary: "Compare durable materials.", sections: [{ title: "Weather resistance", body: "Choose materials that withstand measured gusts and rainfall." }] }],
+  });
+  const user = await open(fixture());
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain roof materials{Enter}");
+  await ui.waitFor(() => assert.equal(activeTopic(), "Go to Roof materials"));
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
+  await ui.waitFor(() => assert.equal(document.querySelector('[data-topic^="topic-"]')?.closest<HTMLElement>("[data-node-id]")?.dataset.detail, "full"));
+  await user.click(ui.screen.getByRole("button", { name: "Up to parent Plan an observatory" }));
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.equal(requests.length, 1);
+});
+
+test("stopping from another topic exposes recovery without losing the next draft", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explain the site{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await user.type(composer, "Keep this separate draft");
+  await user.click(ui.screen.getByRole("button", { name: "Stop generating" }));
+  assert.ok(ui.screen.getByRole("button", { name: "Retry unfinished question" }));
+  await user.click(ui.screen.getByRole("button", { name: "View question" }));
+  assert.equal(activeTopic(), "Go to Plan an observatory");
+  assert.ok(ui.screen.getByText("Explain the site"));
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await user.click(ui.screen.getByRole("button", { name: "Dismiss unfinished question" }));
+  assert.equal(composer.value, "Keep this separate draft");
+  await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });
+  assert.equal(document.querySelector('[data-topic^="exploration-"]'), null);
+  assert.equal(document.querySelector(".request-recovery"), null);
+});
+
+test("an unread answer stays discoverable through unrelated navigation", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture());
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain the site{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });
+  await ui.screen.findByRole("button", { name: "Open answer ↗" });
+  await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  await user.click(ui.screen.getByRole("button", { name: "Conversation map" }));
+  await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
+  assert.equal(activeTopic(), "Go to Protect the roof");
+  assert.equal(ui.screen.queryByRole("button", { name: "Open answer ↗" }), null);
+  assert.equal(requests.length, 1);
+});
+
+test("opening a late organized continuation reveals its new answer even when already visiting that topic", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture());
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Extend the weather analysis{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  const reader = readerFor("weather");
+  reader.scrollTop = 120; ui.fireEvent.scroll(reader);
+  const request = requests[0];
+  await ui.act(async () => { resolveAnswer(Response.json({
+    ...result(request, "continue"),
+    context: { fullIds: ["observatory", "weather"], summaryIds: [], truncated: false },
+    topics: [{ targetId: "weather", decision: "continue", title: "Weather records", summary: "Updated weather analysis.", sections: [{ title: "Updated analysis", body: "Measure wind before committing to the design." }] }],
+  })); });
+  const added = reader.querySelector<HTMLElement>(`[data-message-id="topic-answer-${request.requestId}-0"]`)!;
+  assert.ok(added, "the organized continuation must be accepted before testing its reading target");
+  added.getBoundingClientRect = () => ({ x: 0, y: 400, top: 400, left: 0, right: 600, bottom: 500, width: 600, height: 100, toJSON() { return {}; } });
+  assert.equal(reader.scrollTop, 120, "the late answer must not move a reader before opening it");
+  await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
+  await ui.waitFor(() => assert.equal(reader.scrollTop, 504));
+  assert.equal(activeTopic(), "Go to Weather records");
+});
+
+test("opening one late organized answer returns Back to the view actually visited", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(composer, "Explain roof materials{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
+  const reader = readerFor("equipment");
+  reader.scrollTop = 245; ui.fireEvent.scroll(reader);
+  await user.type(composer, "Keep my equipment question");
+  const request = requests[0];
+  await ui.act(async () => { resolveAnswer(Response.json({
+    ...result(request, "continue"),
+    topics: [{ targetId: request.activeId, decision: "branch", title: "Roof materials", summary: "Compare durable materials.", sections: [{ title: "Weather resistance", body: "Choose materials that withstand measured gusts and rainfall." }] }],
+  })); });
+  await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
+  assert.equal(activeTopic(), "Go to Roof materials");
+  assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
+  await user.click(ui.screen.getByRole("button", { name: "Return to previous view" }));
+  assert.equal(activeTopic(), "Go to Choose equipment", "the unseen origin must not become a phantom Back step");
+  assert.equal(reader.scrollTop, 245);
+  assert.equal(composer.value, "Keep my equipment question");
+  assert.equal(requests.length, 1);
+});
+
+test("dismissing a failed question elsewhere does not advertise a nonexistent answer", async () => {
+  let resolveAnswer!: (value: Response) => void;
+  answer = () => new Promise<Response>((resolve) => { resolveAnswer = resolve; });
+  const user = await open(fixture());
+  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain the site{Enter}");
+  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
+  await ui.act(async () => { resolveAnswer(Response.json({ error: "Temporary failure" }, { status: 503 })); });
+  await user.click(ui.screen.getByRole("button", { name: "Dismiss unfinished question" }));
+  assert.equal(ui.screen.queryByRole("button", { name: "Open answer ↗" }), null);
+  assert.equal(document.querySelector(".composer-notice"), null);
+  assert.equal(document.querySelector(".request-recovery"), null);
+});
+
+test("saved chats keep intact conversations accessible and explain a damaged copy", async () => {
+  const user = await open(fixture());
+  localStorage.setItem("metaphore.ingx.v1:damaged-copy", "{broken");
+  await user.click(ui.screen.getByRole("button", { name: "Saved chats" }));
+  const panel = ui.screen.getByRole("complementary", { name: "Saved chats" });
+  await ui.within(panel).findByText(/Some saved copies could not be read/);
+  assert.ok(ui.within(panel).getByRole("button", { name: /Plan an observatory/ }));
+  assert.equal(localStorage.getItem("metaphore.ingx.v1:damaged-copy"), "{broken");
+});
+
+test("access dialog keeps keyboard focus inside and returns to composing on Escape", async () => {
+  answer = () => Response.json({ error: "Enter the demo access code." }, { status: 401 });
+  const user = await open(fixture());
+  const composer = ui.screen.getByRole("textbox", { name: "Your question" });
+  await user.type(composer, "Explain the site{Enter}");
+  const dialog = await ui.screen.findByRole("dialog", { name: "Demo access" });
+  assert.equal(document.activeElement, ui.within(dialog).getByLabelText("Demo access code"));
+  await user.tab();
+  assert.equal(document.activeElement, ui.within(dialog).getByRole("button", { name: "Continue" }));
+  await user.tab();
+  assert.equal(document.activeElement, ui.within(dialog).getByRole("button", { name: "Close access code" }));
+  await user.tab({ shift: true });
+  assert.equal(document.activeElement, ui.within(dialog).getByRole("button", { name: "Continue" }));
+  await user.keyboard("{Escape}");
+  assert.equal(ui.screen.queryByRole("dialog"), null);
+  assert.equal(document.activeElement, composer);
+  assert.equal(requests.length, 1);
+});
+
 test("Back follows visits while breadcrumb follows ancestry and normal focus reads one topic", async () => {
   const user = await open(fixture());
   const reader = readerFor("observatory");
