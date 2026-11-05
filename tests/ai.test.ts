@@ -123,6 +123,60 @@ test("a branch follow-up retains its original source even after the parent excer
   assert.equal(context.record.truncated, true);
 });
 
+test("later user constraints survive long assistant history when exploring a child", () => {
+  const request = input();
+  const root = request.conversation.explorations[request.conversation.rootId];
+  root.messages.push({ id: "requirements", role: "user", sections: [{ id: "requirements-text", title: "", body: "Only consider remote roles. I cannot relocate, and I have six hours per week available." }] });
+  root.messages.push({ id: "updated-requirement", role: "user", sections: [{ id: "updated-requirement-text", title: "", body: "Correction: I now have eight hours per week; the remote requirement still applies." }] });
+  root.messages.push({ id: "long-answer-after-constraints", role: "assistant", sections: [{ id: "long-answer-after-constraints-text", title: "Details", body: "An extended explanation of application preparation. ".repeat(700) }] });
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  const ancestor = context.payload.topics.find((topic) => topic.id === root.id)!;
+  assert.ok(!JSON.stringify(ancestor.messages).includes("cannot relocate"), "The regression must exceed the ordinary ancestor excerpt.");
+  const retained = context.payload.userRequests.filter((item) => item.topicId === root.id);
+  assert.deepEqual(retained.map((item) => item.messageId), ["requirements", "updated-requirement"]);
+  assert.match(retained[0].text, /cannot relocate/);
+  assert.match(retained[1].text, /eight hours/);
+  assert.ok(retained.every((item) => !item.truncated));
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+});
+
+test("relevant older sibling topics are retrieved beyond the first 24 summaries", () => {
+  const conversation = createConversation();
+  conversation.explorations.root.messages = [{ id: "overview", role: "assistant", sections: [{ id: "overview-body", title: "Systems", body: "Discuss a system design." }] }];
+  for (let index = 0; index < 40; index += 1) {
+    const id = `subject-${index}`;
+    const relevant = index === 38 || index === 39;
+    const title = index === 38 ? "Encryption at rest" : index === 39 ? "Encryption in transit" : `Unrelated task ${index}`;
+    conversation.explorations[id] = { id, title, summary: title, parentId: "root", source: null, position: [0, 0, 0], messages: [{ id: `answer-${index}`, role: "assistant", sections: [{ id: `section-${index}`, title, body: relevant ? `EXACT_PRIOR_DECISION_${index}: preserve the chosen configuration.` : "Unrelated historical text." }] }] };
+  }
+  const request: AnswerRequest = { requestId: "retrieve", conversation, activeId: "subject-0", question: "Compare encryption at rest with encryption in transit using our earlier decisions.", selection: null, mode: "auto", includeIds: [] };
+  conversation.explorations["subject-38"].messages.unshift({ id: "local-encryption-requirement", role: "user", sections: [{ id: "local-encryption-requirement-text", title: "", body: "For storage encryption, keys must remain in our own account." }] });
+  conversation.explorations["subject-38"].messages.at(-1)!.sections[0].body = "An extended storage explanation. ".repeat(400) + "EXACT_PRIOR_DECISION_38";
+  const context = buildAnswerContext(validateAnswerRequest(request));
+  assert.ok(context.record.fullIds.includes("subject-38"));
+  assert.ok(context.record.fullIds.includes("subject-39"));
+  assert.match(JSON.stringify(context.payload.topics), /EXACT_PRIOR_DECISION_38/);
+  assert.match(JSON.stringify(context.payload.topics), /EXACT_PRIOR_DECISION_39/);
+  const requirement = context.payload.userRequests.find((item) => item.messageId === "local-encryption-requirement");
+  assert.equal(requirement?.topicId, "subject-38", "Retrieved constraints retain their local scope.");
+  assert.match(requirement!.text, /keys must remain in our own account/);
+  const result = validateAnswerOutput({ ...answer(), decision: "branch", sourceIds: ["subject-38", "subject-39"] }, request, context.record, "test");
+  assert.deepEqual(result.sourceIds, ["subject-38", "subject-39"]);
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+});
+
+test("retained user requests remain bounded with escaping and deep history", () => {
+  const request = input();
+  const root = request.conversation.explorations[request.conversation.rootId];
+  for (let index = 0; index < 20; index += 1) root.messages.push({ id: `user-request-${index}`, role: "user", sections: [{ id: `user-request-section-${index}`, title: "", body: `${index}: ` + '"\\\n'.repeat(2000) }] });
+  const context = buildAnswerContext(request);
+  assert.ok(context.payload.userRequests.length > 0);
+  assert.ok(context.payload.userRequests.some((item) => item.messageId === "user-request-19"), "Latest corrections must not lose to first-insertion ordering.");
+  assert.ok(context.record.truncated);
+  assert.ok(context.payload.topics.some((topic) => topic.id === request.activeId && topic.messages.length > 0));
+  assert.ok(JSON.stringify(context.payload).length <= MAX_CONTEXT_CHARS);
+});
+
 test("selected clarification sources survive as anchors on later questions in the same topic", () => {
   const request = input();
   const topic = request.conversation.explorations.compensation;
@@ -554,4 +608,19 @@ test("two-call annotation generation carries immutable ownership through both st
   assert.deepEqual(calls, ["metaphore_answer", "metaphore_organization"]);
   assert.deepEqual(result.topics!.map((topic) => topic.annotationId), ["companies-note", "equity-note"]);
   assert.deepEqual(result.topics!.flatMap((topic) => topic.sections), written.topics.flatMap((topic) => topic.sections));
+});
+
+test("existing syntheses can continue only with their accepted contributing sources", () => {
+  const request = input();
+  request.conversation.connections = [
+    { id: "input-a", from: "equity", to: "compensation", type: "synthesis", status: "accepted", reason: "Contributes to the combined result." },
+    { id: "input-b", from: "priorities", to: "compensation", type: "synthesis", status: "accepted", reason: "Contributes to the combined result." },
+  ];
+  const context = buildAnswerContext(request);
+  const continued = { ...answer(), sourceIds: ["equity", "priorities"] };
+  assert.deepEqual(validateAnswerOutput(continued, request, context.record, "test").sourceIds, continued.sourceIds);
+  assert.deepEqual(context.payload.topics.find((topic) => topic.id === "compensation")?.sourceIds, continued.sourceIds);
+  assert.throws(() => validateAnswerOutput({ ...continued, sourceIds: ["equity", "compensation"] }, request, context.record, "test"), /synthesis/);
+  request.conversation.connections[1].status = "suggested";
+  assert.throws(() => validateAnswerOutput(continued, request, context.record, "test"), /synthesis/);
 });

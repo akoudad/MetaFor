@@ -271,3 +271,26 @@ test("missing, duplicate, or crossed annotation outputs reject the whole batch w
     assert.equal(JSON.stringify(space), original);
   }
 });
+
+test("reusing a synthesis preserves inputs and does not duplicate provenance", () => {
+  const initial = createConversation();
+  const first = request(initial);
+  const root = applyAnswer(initial, first, answer(first)).conversation;
+  const splitRequest = { ...request(root), requestId: "separate-options" };
+  const split = applyAnswer(root, splitRequest, { ...answer(splitRequest), topics: ["Option A", "Option B"].map((title) => ({ targetId: root.rootId, decision: "branch" as const, title, summary: title, sections: [{ title, body: `${title} details.` }] })) });
+  const combineRequest = { ...request(split.conversation), requestId: "combine-options" };
+  const combined = applyAnswer(split.conversation, combineRequest, { ...answer(combineRequest), sourceIds: split.topicIds, context: { fullIds: [root.rootId, ...split.topicIds], summaryIds: [], truncated: false } });
+  const before = structuredClone(combined.conversation);
+  const followRequest = { ...request(combined.conversation), requestId: "refine-comparison" };
+  const response: AnswerResult = { ...answer(followRequest), decision: "continue", sections: [{ title: "Overview", body: "The comparison is updated in its existing topic." }], context: { fullIds: [root.rootId, combined.destinationId, ...split.topicIds], summaryIds: [], truncated: false }, topics: [{ targetId: combined.destinationId, decision: "continue", title: "Combined options", summary: "Refined comparison.", sections: [{ title: "Decision", body: "The refined combined answer." }], sourceIds: split.topicIds }] };
+  const refined = applyAnswer(combined.conversation, followRequest, response);
+  assert.deepEqual(refined.topicIds, [combined.destinationId]);
+  assert.deepEqual(refined.conversation.connections, before.connections);
+  assert.equal(refined.conversation.explorations[combined.destinationId].messages.length, before.explorations[combined.destinationId].messages.length + 2);
+  for (const id of split.topicIds) assert.deepEqual(refined.conversation.explorations[id], before.explorations[id]);
+  const invalid = structuredClone(response);
+  invalid.topics![0].sourceIds = [combined.destinationId, split.topicIds[0]];
+  assert.throws(() => applyAnswer(combined.conversation, followRequest, invalid), /synthesis/);
+  assert.deepEqual(combined.conversation, before);
+  validateConversation(refined.conversation);
+});

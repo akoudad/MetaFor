@@ -16,8 +16,6 @@ import type { AnnotationRequest, AnswerRequest, AnswerResult, ModelStatus } from
 import { normalizeText, messageText } from "@/lib/markdown";
 import { CARD_HEIGHT, CARD_WIDTH, FIELD_OF_VIEW, applyPositionOverrides, annotationView, fitOverview, focusView, layoutSpace, normalizeWheel, zoomView } from "@/lib/spatial";
 import type { SpatialPoint } from "@/lib/spatial";
-import { consumeScrollGesture, stepSemanticScroll } from "@/lib/semantic-scroll";
-import type { ScrollGesture } from "@/lib/semantic-scroll";
 
 type SavedPlace = { view: SpatialPoint; draft: string; selection: SourceReference | null; scrollTop: number; annotations?: AnnotationRequest[] };
 type Pointer = { x: number; y: number };
@@ -59,7 +57,6 @@ export default function ConversationSpace() {
   const choiceNow = useRef<string | null>(null);
   const setChoiceParent = useCallback((id: string | null, topicIds: string[] | null = null) => { choiceNow.current = id; setChoiceParentState(id); setChoiceTopicIds(topicIds); }, []);
   const [scrollHint, setScrollHint] = useState("");
-  const scrollGesture = useRef<ScrollGesture | null>(null);
   const [draft, setDraftState] = useState("");
   const draftNow = useRef("");
   const setDraft = useCallback((value: string) => { draftNow.current = value; setDraftState(value); }, []);
@@ -191,7 +188,7 @@ export default function ConversationSpace() {
   const restore = (next: Snapshot) => {
     abort.current?.abort();
     markInteraction();
-    setChoiceParent(null); setAnnotationPair(null); scrollGesture.current = null;
+    setChoiceParent(null); setAnnotationPair(null);
     setPending(null); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = [];
     answerTargets.current.clear();
     saved.current = next.view.places;
@@ -311,16 +308,17 @@ export default function ConversationSpace() {
     answerFocusFrame.current = requestAnimationFrame(reveal);
   }, []);
 
-  const focus = useCallback((id: string) => {
+  const focus = useCallback((id: string, withSource = false) => {
     if (switchingNow.current || !space.explorations[id]) return;
     remember(); markInteraction(); setChoiceParent(null);
     if (id !== activeId) pushHistory(activeId);
     const previous = saved.current[id];
     const { width, height } = size();
     const source = space.explorations[id].source;
-    const frame = source ? annotationView(nodes, source.explorationId, id, width, height) : null;
+    const frame = withSource && source ? annotationView(nodes, source.explorationId, id, width, height) : null;
     setAnnotationPair(frame && source ? { sourceId: source.explorationId, replyId: id } : null);
-    setCamera(frame?.view ?? focusView(pointFor(id), width, height));
+    const point = nodes.find((node) => node.id === id)!.position;
+    setCamera(frame?.view ?? focusView(point, width, height));
     activeNow.current = id; setActiveId(id);
     setDraft(previous?.draft ?? ""); setSelection(previous?.selection ?? null); setAnnotations(previous?.annotations ?? []);
     setIncludeIds([]); setStarted(true); setOverview(false); setNotice(""); setUnreadId(null);
@@ -337,11 +335,12 @@ export default function ConversationSpace() {
 
   const back = useCallback(() => {
     if (switchingNow.current) return;
+    if (!choiceNow.current && !overview && !history.current.length) return;
     markInteraction(); setAnnotationPair(null);
     if (choiceNow.current) { const id = choiceNow.current; focus(id); setCamera(saved.current[id]?.view ?? focusView(pointFor(id), size().width, size().height)); return; }
     if (overview) { setCamera(saved.current[activeId]?.view ?? focusView(pointFor(activeId), size().width, size().height)); setOverview(false); return; }
-    const id = history.current.pop() ?? active.parentId;
-    if (!id || !space.explorations[id]) { showOverview(); return; }
+    const id = history.current.pop();
+    if (!id || !space.explorations[id]) return;
     remember();
     const previous = saved.current[id];
     activeNow.current = id; setActiveId(id);
@@ -375,7 +374,7 @@ export default function ConversationSpace() {
     const leavingChoice = Boolean(choiceNow.current);
     const previousChoiceFocus = choicePanel.current?.contains(document.activeElement) ? document.activeElement : null;
     const camera = saved.current[id]?.view;
-    focus(id);
+    focus(id, leavingChoice && id !== choiceNow.current);
     if (camera && !space.explorations[id]?.source) setCamera(camera);
     if (leavingChoice) {
       const generation = navigation.current;
@@ -423,10 +422,8 @@ export default function ConversationSpace() {
       const now = performance.now();
       const delta = normalizeWheel(event.deltaY, event.deltaMode);
       if (!delta) return;
-      const scope = () => `${space.id}:${choiceNow.current ? `choice:${choiceNow.current}` : overview ? "overview" : `topic:${activeNow.current}`}`;
       if (event.ctrlKey) {
         if (event.cancelable) event.preventDefault();
-        scrollGesture.current = consumeScrollGesture(scope(), delta, now);
         if (!wheelAnchor.current || now - wheelAnchor.current.time > 180) {
           const id = target.closest<HTMLElement>("[data-topic]")?.dataset.topic ?? hover.current ?? activeNow.current;
           wheelAnchor.current = { point: pointFor(id), id, time: now };
@@ -435,49 +432,21 @@ export default function ConversationSpace() {
         zoom(delta * 2, wheelAnchor.current.point, wheelAnchor.current.id);
         return;
       }
-      const nativeReader = target.closest<HTMLDivElement>('.world-node[data-detail="full"] .topic-reading');
-      const nativeId = nativeReader?.closest<HTMLElement>("[data-topic]")?.dataset.topic;
-      if (!annotationFrame && !choiceNow.current && !overview && nativeId && nativeId !== activeNow.current) activate(nativeId);
-      const id = annotationFrame && nativeId ? nativeId : activeNow.current;
-      const choiceList = choiceNow.current ? target.closest<HTMLDivElement>(".topic-choice-list") : null;
-      const reader = choiceList ?? readers.current.get(id);
-      const node = reader?.closest<HTMLElement>("[data-node-id]");
-      const full = !overview && !choiceNow.current && node?.dataset.detail === "full" && node.style.visibility !== "hidden";
-      const max = Math.max(0, (reader?.scrollHeight ?? 0) - (reader?.clientHeight ?? 0));
-      const top = Math.max(0, Math.min(max, reader?.scrollTop ?? 0));
-      const remaining = full || choiceList ? delta > 0 ? max - top : top : 0;
-      const result = stepSemanticScroll(scrollGesture.current, { scope: scope(), delta, now, remaining });
-      scrollGesture.current = result.state;
       markInteraction();
-      if (result.action === "read" && reader) {
-        if (choiceList || reader === nativeReader) return;
-        if (event.cancelable) event.preventDefault();
-        reader.scrollTop = Math.max(0, Math.min(max, top + delta));
-        remember();
-        if (scrollTimer.current) clearTimeout(scrollTimer.current);
-        scrollTimer.current = setTimeout(() => setScrollRevision((value) => value + 1), 250);
-        return;
-      }
+      // A wheel always reads. Reaching an edge never changes topic or camera.
+      // Native readers and the path chooser keep their browser scrolling.
+      const nativeReader = target.closest<HTMLDivElement>('.world-node[data-detail="full"] .topic-reading');
+      if (nativeReader || target.closest(".topic-choice-list")) return;
       if (event.cancelable) event.preventDefault();
-      if (result.action === "wait") {
-        if (full && remaining <= 1) {
-          const leaf = delta > 0 && !Object.values(space.explorations).some((item) => item.parentId === id);
-          setScrollHint(leaf ? "Ask a follow-up to explore further." : delta > 0 ? "Pause, then scroll down to explore." : "Pause, then scroll up to return.");
-        }
-        return;
-      }
-      if (choiceNow.current) {
-        if (delta < 0) resumeTopic(choiceNow.current);
-        return;
-      }
-      if (overview) { if (delta > 0) resumeTopic(id); return; }
-      if (!full && delta > 0) { focus(id); return; }
-      if (delta > 0) exploreChildren(id);
-      else {
-        const parentId = space.explorations[id]?.parentId;
-        if (parentId) resumeTopic(parentId);
-        else showOverview();
-      }
+      if (overview || choiceNow.current) return;
+      const reader = readers.current.get(activeNow.current);
+      const node = reader?.closest<HTMLElement>("[data-node-id]");
+      if (!reader || node?.dataset.detail !== "full" || node.style.visibility === "hidden") return;
+      const max = Math.max(0, reader.scrollHeight - reader.clientHeight);
+      reader.scrollTop = Math.max(0, Math.min(max, reader.scrollTop + delta));
+      remember();
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+      scrollTimer.current = setTimeout(() => setScrollRevision((value) => value + 1), 250);
     };
     const chooser = choicePanel.current;
     element.addEventListener("wheel", wheel, { passive: false });
@@ -493,10 +462,12 @@ export default function ConversationSpace() {
         if (selectionPreview) { event.preventDefault(); dismissSelectionPreview(); return; }
         if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); }
         else if (choiceNow.current) resumeTopic(choiceNow.current);
+        else if (["TEXTAREA", "INPUT"].includes(target.tagName)) { target.blur(); }
         else if (started) back();
         return;
       }
       if (["TEXTAREA", "INPUT", "SELECT"].includes(target.tagName) || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (target.closest(".topic-reading") && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) markInteraction();
       if (event.key === "/") { event.preventDefault(); composer.current?.focus(); }
       if (!started) return;
       if (event.key === "+" || event.key === "=") { event.preventDefault(); zoom(-180); }
@@ -505,13 +476,15 @@ export default function ConversationSpace() {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom, selectionPreview, dismissSelectionPreview, resumeTopic]);
+  }, [back, help, menu, savedChats, connections, showAccess, showOverview, started, zoom, selectionPreview, dismissSelectionPreview, resumeTopic, markInteraction]);
 
   const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (switchingNow.current) return;
     const target = event.target as HTMLElement;
     const moveId = target.closest<HTMLElement>("[data-move-topic]")?.dataset.moveTopic;
-    if (event.button !== 0 || (!moveId && target.closest("button, textarea, .topic-reading"))) return;
+    if (event.button !== 0) return;
+    if (!moveId && target.closest(".topic-reading")) { markInteraction(); return; }
+    if (!moveId && target.closest("button, textarea")) return;
     markInteraction();
     if (!pointers.current.size) setCamera({ ...renderedView.current });
     if (moveId) { event.preventDefault(); moving.current = { id: moveId, point: pointFor(moveId), pointer: { x: event.clientX, y: event.clientY } }; }
@@ -661,6 +634,7 @@ export default function ConversationSpace() {
         const currentSource = scopedTopic?.messages.find((message) => message.role === "assistant" && (message.id === `answer-${task.request.requestId}` || message.id.startsWith(`topic-answer-${task.request.requestId}-`)))?.source;
         const scopedSource = scopedTopic?.source && (!currentSource || JSON.stringify(currentSource) === JSON.stringify(scopedTopic.source)) ? scopedTopic.source : null;
         if (scopedId && scopedSource) {
+          if (scopedId !== applied.destinationId) pushHistory(applied.destinationId);
           const frame = annotationView(layoutSpace(applied.conversation, positions), scopedSource.explorationId, scopedId, size().width, size().height);
           activeNow.current = scopedId; setActiveId(scopedId); setChoiceParent(null);
           setDraft(saved.current[scopedId]?.draft ?? ""); setAnnotations(saved.current[scopedId]?.annotations ?? []);
@@ -683,7 +657,7 @@ export default function ConversationSpace() {
         });
       } else {
         if (newTopicIds.length) setTransition({ key: task.request.requestId, fromId: task.request.activeId, toId: newTopicIds[0], toIds: newTopicIds, follow: false });
-        unreadTopics.current = topicIds; setUnreadId(applied.destinationId); setUnreadMessageId(`answer-${task.request.requestId}`); setNotice(topicIds.length ? `Your answer is ready in ${topicIds.length} topics.` : "Your answer is ready.");
+        unreadTopics.current = topicIds; setUnreadId(applied.destinationId); setUnreadMessageId(`answer-${task.request.requestId}`); setNotice(topicIds.length ? `Your answer is ready in ${topicIds.length} ${topicIds.length === 1 ? "topic" : "topics"}.` : "Your answer is ready.");
       }
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -834,20 +808,31 @@ export default function ConversationSpace() {
     else if (!annotationsNow.current.length && source.explorationId !== activeId) activate(source.explorationId);
     setSelection(source); setNotice(""); composer.current?.focus();
   };
-  const openSource = (source: SourceReference, select = true) => {
+  const openSource = (source: SourceReference) => {
     if (switchingNow.current) return;
     const conversationId = space.id;
     focus(source.explorationId);
-    requestAnimationFrame(() => {
-      if (switchingNow.current || spaceNow.current.id !== conversationId || activeNow.current !== source.explorationId) return;
+    const generation = navigation.current;
+    const deadline = performance.now() + 2200;
+    const reveal = () => {
+      readerFocusFrame.current = null;
+      if (navigation.current !== generation || performance.now() > deadline || switchingNow.current || spaceNow.current.id !== conversationId || activeNow.current !== source.explorationId) return;
       const reader = readers.current.get(source.explorationId);
+      const node = reader?.closest<HTMLElement>("[data-node-id]");
       const section = reader?.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(source.sectionId)}"]`);
-      if (reader && section) {
+      if (reader && section && node?.dataset.detail === "full" && !node.inert && node.style.visibility === "visible") {
         const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
-        reader.scrollTop += (section.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 12;
+        if (scale > 0) {
+          reader.scrollTop += (section.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 12;
+          section.classList.remove("source-revealed");
+          void section.offsetWidth;
+          section.classList.add("source-revealed");
+          return;
+        }
       }
-      if (select) setSelection(source);
-    });
+      readerFocusFrame.current = requestAnimationFrame(reveal);
+    };
+    readerFocusFrame.current = requestAnimationFrame(reveal);
   };
   const selectedMessage = selection && space.explorations[selection.explorationId]?.messages.find((message) => message.id === selection.messageId);
   const selectionLabel = selection?.quote ?? selectedMessage?.sections.find((section) => section.id === selection?.sectionId)?.title;
@@ -859,12 +844,12 @@ export default function ConversationSpace() {
       <div className="top-actions">
         <button onClick={() => void openFresh()} disabled={!ready || switching || Boolean(pending && !pending.error)}>New chat</button>
         <button onClick={() => { setSavedChats(!savedChats); setMenu(false); }} disabled={!ready || switching} aria-expanded={savedChats}>Saved chats</button>
-        {started && <button onClick={showOverview} aria-label="Overview" title="Overview · 0">⤢</button>}
+        {started && <button onClick={showOverview} aria-label="Overview" title="Overview · 0">Map</button>}
         <button onClick={() => { setMenu(!menu); setSavedChats(false); }} aria-label="Conversation menu" aria-expanded={menu}>⋯</button>
       </div>
     </header>
-    {started && <nav className="breadcrumbs" aria-label="Conversation path"><button onClick={back} aria-label="Return to previous view">←</button>{path.map((item, index) => <span key={item.id}>{index > 0 && <i>/</i>}<button onClick={() => focus(item.id)} aria-current={item.id === activeId ? "page" : undefined}>{item.title}</button></span>)}</nav>}
-    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll to read the current answer, even over empty space. At its end, pause and scroll again to explore connected topics.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, and write a question. Select another passage to queue the first annotation. Send them together for separate linked replies.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Scroll up from the beginning to return. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 shows everything.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
+    {started && <nav className="breadcrumbs" aria-label="Conversation path"><button onClick={back} aria-label="Return to previous view" disabled={!overview && !choiceParentId && !history.current.length}>← Back</button>{path.map((item, index) => <span key={item.id}>{index > 0 && <i>/</i>}<button onClick={() => focus(item.id)} aria-current={item.id === activeId ? "page" : undefined}>{item.title}</button></span>)}</nav>}
+    {help && <aside className="help-panel"><button onClick={() => setHelp(false)} aria-label="Close navigation help">×</button><p>Scroll to read, even over empty space. Reading never changes your topic. Follow a linked topic or choose Explore at the end of an answer.</p><p>Drag empty space to move around. Drag a topic’s ⠿ handle to place it.</p><p>Select a passage, click “Ask about this”, and write a question. Select another passage to queue the first annotation. Send them together for separate linked replies.</p><p>Use the left marks to preview and jump. ↑ / ↓ and Enter work when the rail is focused.</p><p>Back returns to your previous view. The breadcrumb names take you up the topic hierarchy. Map shows the whole conversation. Pinch, Ctrl + scroll, or + / − zoom freely. Esc returns. 0 opens the map.</p><button onClick={resetLayout} disabled={!started}>Reset layout</button></aside>}
     {savedChats && <aside className="saved-chats-panel" aria-label="Saved chats">
       <div className="panel-heading"><span>Saved chats</span><button onClick={() => setSavedChats(false)} aria-label="Close saved chats">×</button></div>
       <p className="panel-explainer">Saved in this browser.</p>
@@ -888,7 +873,7 @@ export default function ConversationSpace() {
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
     <div ref={stage} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
       <SpatialWorld nodes={started ? presentedNodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds ?? annotationFrame?.visibleIds} fullDetailIds={annotationFrame?.visibleIds}>
-        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={focus} onExplore={() => { scrollGesture.current = consumeScrollGesture(`${space.id}:topic:${node.id}`, 1, performance.now()); exploreChildren(node.id); }} onSource={openSource} readingRef={(element) => {
+        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} onFocus={() => focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={(id) => focus(id, true)} onExplore={() => exploreChildren(node.id)} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
         }} onScroll={(top) => {
@@ -915,7 +900,7 @@ export default function ConversationSpace() {
       {annotations.length > 0 && <section className="annotation-queue" aria-label="Queued annotations">
         <div className="annotation-queue-heading"><span>{annotations.length} {annotations.length === 1 ? "annotation" : "annotations"} ready</span><span>Select another passage to add</span></div>
         <div className="annotation-queue-list">{annotations.map((item, index) => <div className="annotation-draft" key={item.id}>
-          <button className="annotation-number" aria-label={`Show source for annotation ${index + 1}`} onClick={() => openSource(item.source, false)}>{index + 1}</button>
+          <button className="annotation-number" aria-label={`Show source for annotation ${index + 1}`} onClick={() => openSource(item.source)}>{index + 1}</button>
           <div><p>{item.source.quote ?? space.explorations[item.source.explorationId]?.messages.find((message) => message.id === item.source.messageId)?.sections.find((section) => section.id === item.source.sectionId)?.title ?? "Selected section"}</p><textarea aria-label={`Question for annotation ${index + 1}`} value={item.question} rows={1} maxLength={8000} onChange={(event) => { markInteraction(); setAnnotations(annotationsNow.current.map((entry) => entry.id === item.id ? { ...entry, question: event.target.value } : entry)); }} /></div>
           <button aria-label={`Remove annotation ${index + 1}`} onClick={() => { markInteraction(); setAnnotations(annotationsNow.current.filter((entry) => entry.id !== item.id)); }}>×</button>
         </div>)}</div>
@@ -928,7 +913,7 @@ export default function ConversationSpace() {
     </div>
     {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onSubmit={(event) => { event.preventDefault(); setShowAccess(false); if (pending) void runRequest(pending); }}><button type="button" className="panel-close" onClick={() => setShowAccess(false)} aria-label="Close access code">×</button><label htmlFor="demo-code">Demo access code</label><input id="demo-code" type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} autoComplete="off" autoFocus /><button type="submit">Continue</button></form></div>}
     {switching && <div className="workspace-transition" role="status">Opening conversation…</div>}
-    <footer className="navigation-hint"><span>{started ? "SCROLL TO READ · PAUSE AT THE EDGE TO EXPLORE · PINCH TO ZOOM" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
+    <footer className="navigation-hint"><span>{started ? "SCROLL TO READ · FOLLOW A TOPIC TO EXPLORE · PINCH TO ZOOM" : "A CONVERSATION YOU CAN EXPLORE"}</span><span className="save-status" role="status">{ready ? started || draft ? saveState : "" : "Opening…"}</span></footer>
     <span className="sr-only" role="status" aria-live="polite">{started ? `${active.title}, depth ${getDepth(space, active.id)}${overview ? ", overview" : ""}` : "Ready for your question"}</span>
   </main>;
 }

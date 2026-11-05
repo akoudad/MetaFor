@@ -37,12 +37,16 @@ export default function TopicCard(props: TopicCardProps) {
   const scrollTo = (id: string, button: HTMLButtonElement) => {
     const article = button.closest("article");
     const reader = article?.querySelector<HTMLDivElement>(".topic-reading");
-    const section = reader?.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(id)}"]`);
-    if (reader && section) {
-      const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
-      reader.scrollTop += (section.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 12;
-    }
     setOutline(false);
+    // Measure after collapsing the outline, so removed rows cannot shift the target.
+    requestAnimationFrame(() => {
+      const section = reader?.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(id)}"]`);
+      if (reader?.isConnected && section) {
+        const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
+        if (scale > 0) reader.scrollTop += (section.getBoundingClientRect().top - reader.getBoundingClientRect().top) / scale - 12;
+        reader.focus({ preventScroll: true });
+      }
+    });
   };
 
   const metadata = (message: Message) => <div className="answer-meta" data-no-selection>
@@ -82,7 +86,7 @@ export default function TopicCard(props: TopicCardProps) {
             <AnswerBody text={section.body} />
           </section>)}
         </div>
-        {message.sections.flatMap((section) => getSectionChildren(space, section.id)).map((child) => <button className="branch-link" key={child.id} onClick={() => props.onOpen(child.id)}>{child.title} <span>↗</span></button>)}
+        {Array.from(new Map(message.sections.flatMap((section) => getSectionChildren(space, section.id)).map((child) => [child.id, child])).values()).map((child) => <button className="branch-link" key={child.id} onClick={() => props.onOpen(child.id)}>{child.title} <span>↗</span></button>)}
         {metadata(message)}
       </div>)}
       {props.pendingQuestion && <div className="pending-answer" role="status">

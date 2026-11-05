@@ -45,21 +45,22 @@ connections, independently of where topics appear on screen.
    files to carry conversations between browsers. Older saved samples remain
    available in the library but are not restored automatically at startup.
 
-Scroll inside an answer or over empty space to read the active topic. After
-reaching its bottom, pause briefly and continue down: one child opens directly;
-several children appear together with readable titles to choose from. The
-**Explore topics** action at the answer's end provides the same route without a
-wheel gesture. At a leaf, scrolling stays put and you can ask a follow-up.
+Scroll inside an answer or over empty space to read the active topic. Reaching
+either edge never changes topic or camera. Follow a topic link or use
+**Explore topics** at the answer's end: one child opens directly; several children
+appear together with readable titles to choose from. Scrolling the chooser reads
+its choices without picking one.
 
-At the beginning, an upward gesture returns to the parent and its saved reading
-position. Continuing up through parents eventually reaches the root and then
-the overview. In a child chooser, up returns to its parent; down never picks a
-path silently. Scrolling down from the overview resumes the active topic.
+**Back** retraces visited views and restores reading position and draft. The
+breadcrumb follows ancestry, while the rail switches to another topic and
+**Map** shows the whole conversation. The map stays open until you choose a
+topic or return. `Esc` closes an overlay first; in a draft it leaves typing mode;
+otherwise it performs Back. A source link reveals its passage without attaching
+it to your next question. Use selection or **Ask about** to attach a passage.
 
-A gesture that reads text cannot also change levels. A fresh gesture is required
-at an edge, and momentum cannot cross several levels. Returning preserves the
-topic's draft and reading position, including a passage halfway through an answer.
-This follows navigation parents, independently of related and synthesis links.
+Ordinary topic navigation shows one reader. Following a passage reply can keep
+its source alongside it when there is room. Returning preserves a passage
+halfway through a long answer, independently of related and synthesis links.
 A choice shown after an answer may also list several affected topics from
 different parts of the conversation.
 

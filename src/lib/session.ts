@@ -1,7 +1,7 @@
 import type { AnswerRequest, AnswerResult } from "./contracts";
 import type { Connection, Conversation, Exploration, Message } from "./model";
 import { validateConversation, validateSourceReference } from "./model";
-import { validateAnnotationAnswers, validateAnnotations, validateSynthesisSources, validateTopicAnswers } from "./ai";
+import { existingSynthesisSources, validateAnnotationAnswers, validateAnnotations, validateSynthesisSources, validateTopicAnswers } from "./ai";
 
 export function createConversation(): Conversation {
   return {
@@ -73,7 +73,7 @@ export function applyAnswer(
   }
 
   const allowed = new Set([...answer.context.fullIds, ...answer.context.summaryIds]);
-  const topics = validateTopicAnswers(answer.topics, originId, allowed);
+  const topics = validateTopicAnswers(answer.topics, originId, allowed, space);
   validateAnnotationAnswers(topics, annotations);
   if (topics.length && request.mode !== "auto") throw new Error("Separate topic answers require automatic placement.");
   if (topics.some((topic) => !Object.hasOwn(space.explorations, topic.targetId))) throw new Error("An additional answer target no longer exists.");
@@ -81,7 +81,7 @@ export function applyAnswer(
 
   const initialRoot = origin.id === space.rootId && !origin.messages.some((message) => message.role === "assistant");
   const decision = initialRoot || topics.length ? "continue" : answer.decision;
-  const sourceIds = validateSynthesisSources(answer.sourceIds, decision, allowed);
+  const sourceIds = validateSynthesisSources(answer.sourceIds, decision, allowed, existingSynthesisSources(space, originId));
   if (sourceIds.some((id) => !Object.hasOwn(space.explorations, id)) || topics.some((topic) => topic.sourceIds?.some((id) => !Object.hasOwn(space.explorations, id)))) throw new Error("A synthesis source no longer exists.");
   const explorations = { ...space.explorations };
   const connections: Connection[] = [...(space.connections ?? [])];
@@ -122,7 +122,11 @@ export function applyAnswer(
       messages: [...target.messages, question, response],
     };
     if ((output.sourceIds?.length ?? 0) >= 2) {
-      for (const [index, from] of output.sourceIds!.entries()) connections.push({ id: `synthesis-${request.requestId}-${outputIndex}-${index}`, from, to: destinationId, type: "synthesis", reason: `Combined in ${output.title}.`, status: "accepted" });
+      for (const [index, from] of output.sourceIds!.entries()) {
+        if (!connections.some((edge) => edge.type === "synthesis" && edge.status === "accepted" && edge.from === from && edge.to === destinationId)) {
+          connections.push({ id: `synthesis-${request.requestId}-${outputIndex}-${index}`, from, to: destinationId, type: "synthesis", reason: `Combined in ${output.title}.`, status: "accepted" });
+        }
+      }
     }
     destinationIds.push(destinationId);
   }

@@ -422,7 +422,9 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         element.style.zIndex = String(node.id === activeId ? camera.far + 1 : Math.max(1, Math.round(camera.far - distance)));
         element.style.setProperty("--node-scale", String(Math.max(0.1, scale)));
         const mobileFullThreshold = Math.max(0.1, (width - 32) / CARD_WIDTH * 0.9);
-        const detail = fullDetailNodeIds.has(node.id) || scale >= mobileFullThreshold ? "full" : detailForScale(scale);
+        const scaledDetail = fullDetailNodeIds.has(node.id) || scale >= mobileFullThreshold ? "full" : detailForScale(scale);
+        // Only the reader and explicitly paired sources expand during focus.
+        const detail = activeId !== undefined && node.id !== activeId && !fullDetailNodeIds.has(node.id) && scaledDetail === "full" ? "summary" : scaledDetail;
         element.dataset.detail = detail;
         // Keep projectable endpoints so links can cross the clipped viewport
         // even when an endpoint's card is completely offscreen.

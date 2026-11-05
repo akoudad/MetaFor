@@ -13,8 +13,9 @@ subjects, reuse existing topics, or combine ideas into a new synthesis topic.
 Synthesis links back to its inputs and keeps the originals. Placement is a model
 decision; it is not guaranteed to match your preferred grouping.
 
-Scroll to read and continue through connected topics. Choose a path when there
-are several. Drag topics to arrange them; pinch or use the zoom controls to see
+Scroll to read. Follow a topic link or choose **Explore topics** to go deeper;
+**Back** returns to your previous reading place. Drag topics to arrange them;
+pinch or use the zoom controls to see
 the wider space. Chats save in your browser. Export `.ingx` to carry the
 conversation, connections, and view state together.
 

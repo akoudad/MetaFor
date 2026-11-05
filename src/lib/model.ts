@@ -97,9 +97,21 @@ export function getSectionChildren(
   space: Conversation,
   sectionId: string,
 ): Exploration[] {
-  return Object.values(space.explorations).filter(
-    (exploration) => exploration.source?.sectionId === sectionId,
-  );
+  return Object.values(space.explorations).filter((exploration) => {
+    const matches = (source: SourceReference | null | undefined) => {
+      if (!source || source.explorationId === exploration.id) return false;
+      if (source.sectionId === sectionId || source.endSectionId === sectionId) return true;
+      if (!source.endSectionId) return false;
+      const message = space.explorations[source.explorationId]?.messages.find((item) => item.id === source.messageId);
+      if (!message) return false;
+      const start = message.sections.findIndex((section) => section.id === source.sectionId);
+      const end = message.sections.findIndex((section) => section.id === source.endSectionId);
+      const selected = message.sections.findIndex((section) => section.id === sectionId);
+      return start >= 0 && selected >= start && selected <= end;
+    };
+    // A reused topic can answer a new passage without changing its original parent.
+    return matches(exploration.source) || exploration.messages.some((message) => matches(message.source));
+  });
 }
 
 export const CONVERSATION_LIMITS = {

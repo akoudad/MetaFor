@@ -37,20 +37,23 @@ The mini-map projects actual topic coordinates isometrically and supports pointe
 and keyboard navigation. Its diamond marks the camera destination, not a live
 camera position. This keeps ambient and camera frames out of React state updates.
 
-Ordinary wheel input follows reading and navigation parents. Native answer
-scrolling is preserved; wheel input over empty space scrolls the active reader.
-At an edge, a gesture gate requires fresh intent after a brief quiet interval,
-and permits at most one semantic step per gesture. Reaching an edge while reading
-does not immediately move to another topic. Pinch/Ctrl-wheel and explicit zoom
-controls retain geometric camera movement.
+Ordinary wheel input only reads. Native answer scrolling is preserved; wheel
+input over empty space scrolls the active visible reader. Neither fresh gestures
+nor momentum at an edge change topics or camera. Topic links and the Explore
+action perform traversal. Pinch/Ctrl-wheel and explicit zoom controls retain
+geometric camera movement. Keyboard reading and scrollbar pointer input, like
+wheel input, cancel pending automatic answer following.
 
 The reading, child-choice, and overview states are separate. A child-choice view
 frames its parent and direct children while keeping other readers mounted and
 hidden so their reading positions survive. An HTML chooser keeps titles legible
 even in a wide tree. Only `parentId` determines these paths; related links do not.
-Return navigation restores saved reading state rather than forcing the parent to
-its beginning or end. Scrolling never invokes generation or selects a child from
-a multi-child choice automatically.
+Back retraces visit history; breadcrumbs follow ancestry. Returning restores
+saved reading state. The map never silently resumes a reader on wheel input.
+Normal focus uses canonical graph coordinates and one reader; explicit passage
+links may use temporary source/reply positions. Source visits wait for a readable
+card before aligning the passage and do not modify composer selection. Outlines
+collapse before measuring their target; card headers reserve their actual height.
 
 Automatic positions use stable, compact sibling slots: four siblings form a
 small grid, and later topics take available slots without moving earlier topics.
@@ -130,10 +133,12 @@ resize, navigation, or dismissal removes the action to avoid a stale screen anch
    an overview of at most two sections and 4,000 serialized characters. A target
    can be an existing topic to continue or an existing parent for a new topic;
    outputs cannot target another node newly created in the same batch.
-6. A synthesis branches into a new topic with two to eight unique supplied
+6. A new synthesis branches into a topic with two to eight unique supplied
    `sourceIds`. Add accepted, directed input-to-synthesis edges and retain every
-   original topic. Synthesis edges do not change navigation ancestry. Continuing
-   an existing topic refreshes its summary and retains its established title.
+   original topic. An existing synthesis can continue using its already accepted
+   inputs without duplicating edges; changing contributors requires a new
+   synthesis. Synthesis edges do not change navigation ancestry. Continuing an
+   existing topic refreshes its summary and retains its established title.
 
 A batch accepts up to six annotations, with up to 8,000 characters per question,
 24,000 question characters in total, and 24,000 resolved passage characters.
@@ -158,6 +163,12 @@ set only when it belongs to that topic's navigation parent; a cross-topic reques
 keeps its source on the messages without inventing a parent passage.
 
 Context records distinguish excerpts from summaries and flag truncation.
+Original user requests and later corrections have a separate bounded allocation
+across ancestors and included topics, before assistant histories consume space.
+Generic lexical relevance ranks distant topics and retrieves up to three related
+bodies. This is bounded retrieval, not a guarantee that every relevant topic fits.
+Creation sources and later message sources both expose forward reply links;
+multi-section selections link from every covered section without duplicating a topic.
 `fullIds` may include shortened excerpts or source anchors; it does not mean all
 historical text was read. Related or synthesis links alone do not include every
 word of their inputs. Explicit inclusion and direct-child selection still obey

@@ -37,6 +37,29 @@ test("section navigation opens only explorations anchored to that section", () =
   );
 });
 
+test("a new passage discovers reused replies across their complete source range without duplicate or self links", () => {
+  const space = createSampleConversation();
+  const source = { explorationId: "job-search", messageId: "job-search-answer", sectionId: "companies", endSectionId: "interviews" };
+  const topic = space.explorations.equity;
+  const originalParent = topic.parentId;
+  const originalSource = structuredClone(topic.source);
+  topic.messages.push(
+    { id: "reuse-question", role: "user", source, sections: [{ id: "reuse-question-text", title: "", body: "How does this change our earlier comparison?" }] },
+    { id: "reuse-answer", role: "assistant", source, sections: [{ id: "reuse-answer-text", title: "Comparison", body: "The existing topic contains this new reply." }] },
+  );
+  space.explorations[space.rootId].messages.push({ id: "same-topic-answer", role: "assistant", source, sections: [{ id: "same-topic-answer-text", title: "Clarification", body: "This continues in the source itself." }] });
+  assert.doesNotThrow(() => validateConversation(space));
+  for (const sectionId of ["companies", "priorities", "interviews"]) {
+    const ids = getSectionChildren(space, sectionId).map((item) => item.id);
+    assert.equal(ids.filter((id) => id === topic.id).length, 1, "Both message references resolve to one destination.");
+    assert.ok(!ids.includes(space.rootId), "A clarification does not create a link to itself.");
+  }
+  assert.ok(!getSectionChildren(space, "weekly-plan").some((item) => item.id === topic.id));
+  assert.ok(getSectionChildren(space, "compensation-equity").some((item) => item.id === topic.id), "The original source remains discoverable too.");
+  assert.equal(topic.parentId, originalParent);
+  assert.deepEqual(topic.source, originalSource);
+});
+
 test("starting another sample does not share mutable content", () => {
   const first = createSampleConversation();
   const second = createSampleConversation();

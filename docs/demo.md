@@ -40,9 +40,9 @@ placement rather than promising a particular graph.
    their trade-offs. If a synthesis topic is created, show its directed input
    arrows and the original topics that remain available. This is a new answer,
    not a destructive merge of the old discussions.
-6. **Navigate and resume.** Read with the wheel. After reaching an edge, pause
-   and continue to explore or return. Use **Explore topics** and the mini-map as
-   alternatives. Drag a topic, reset the layout, then reopen the conversation
+6. **Navigate and resume.** Read with the wheel. Follow a topic link or choose
+   **Explore topics**, then use **Back** to return to your reading place.
+   Use **Map** for the wider conversation. Drag a topic, reset the layout, then reopen the conversation
    through **Saved chats**. Export an `.ingx` copy.
 7. **Explain the implementation.** “The writer creates content. The organizer
    assigns its sections to the conversation. The app checks every section is
