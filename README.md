@@ -2,8 +2,9 @@
 
 Explore an AI conversation by topic without losing your place.
 
-Select a passage and click **Ask about this**. Read its explanation, explore
-connected topics, and return to the original answer. Reading positions, drafts,
+Select a passage and click **Ask about this**. Write and send your annotation
+beside the passage; your normal question draft stays separate. Read its explanation,
+explore connected topics, and return to the original answer. Reading positions, drafts,
 and exact passage sources are preserved. Add questions to several passages and
 send them together for separate replies. On a wide screen, a focused reply opens
 beside its source.

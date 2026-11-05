@@ -185,7 +185,6 @@ input, select { font: inherit; color: inherit; }
 .exploration-controls button { color: #ccc; pointer-events: auto; min-height: 32px; }
 .exploration-controls button:hover { color: #fff; }
 .exploration-controls .exploration-instruction { color: #777; }
-.has-annotations .exploration-controls { bottom: 345px; }
 .request-recovery { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: 0 0 10px 53px; font-size: 11px; color: #aaa; }
 .request-recovery button { color: #ddd; }
 .answer-section > .branch-link { display: block; }
@@ -195,7 +194,6 @@ input, select { font: inherit; color: inherit; }
   .exploration-controls { bottom: 133px; left: 48px; right: 18px; gap: 4px 12px; font-size: 10px; }
   .exploration-controls > * { max-width: min(32ch, 70vw); }
   .exploration-controls .exploration-instruction { display: none; }
-  .has-annotations .exploration-controls { bottom: 305px; }
 }
 .composer-context { justify-content: space-between; }
 .composer-context > span { max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -283,13 +281,37 @@ input, select { font: inherit; color: inherit; }
 .source-annotation-marker { display: block; margin-bottom: 6px; }
 .send-annotations { display: block; margin: 8px 0 0 auto; font-size: 12px; color: #ddd; }
 .queue-annotation { display: block; margin: 0 0 8px 53px; font-size: 11px; color: #aaa; }
-.has-annotations .world-stage { bottom: 340px; }
+.annotation-tray { display: flex; align-items: center; gap: 10px; margin: 0 0 12px 53px; color: #999; font-size: 11px; }
+.has-annotation-drafts .world-stage { bottom: 182px; }
+.has-annotation-drafts .exploration-controls { bottom: 187px; }
+.annotation-tray > span, .annotation-tray > button { flex-shrink: 0; }
+.annotation-tray > div { display: flex; gap: 8px; overflow-x: auto; min-width: 0; }
+.annotation-token { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #303030; border-radius: 4px; }
+.annotation-token > button:first-child { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annotation-token > button:last-child { padding: 3px; }
+.resume-annotation { margin: 0 0 12px 53px; font-size: 11px; color: #aaa; }
 @media (max-width: 700px) {
+  .annotation-tray { margin-left: 0; gap: 6px; }
+  .has-annotation-drafts .world-stage { bottom: 170px; }
+  .has-annotation-drafts .exploration-controls { bottom: 173px; }
   .annotation-queue { margin-left: 0; padding: 9px 12px; }
   .annotation-queue-heading > span:last-child { display: none; }
   .annotation-queue-list { max-height: 110px; }
-  .has-annotations .world-stage { bottom: 300px; }
 }
 
 .answer-section.source-revealed { animation: reveal-source 2.4s ease-out; }
 @keyframes reveal-source { from { border-left-color: #ddd; background: #ffffff0d; } to { border-left-color: transparent; background: transparent; } }
+
+.annotation-popover { position: fixed; z-index: 46; width: 320px; padding: 14px; overflow-y: auto; overscroll-behavior: contain; background: #0b0b0b; border: 1px solid #3b3b3b; border-radius: 8px; box-shadow: 0 12px 38px #000b; cursor: auto; }
+.annotation-popover:focus-within { border-color: #606060; }
+.annotation-popover-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #aaa; font-size: 11px; }
+.annotation-popover-heading button { width: 24px; height: 24px; margin: -5px -5px -3px 0; color: #999; font-size: 19px; }
+.annotation-popover-source { margin: 10px 0 12px; padding-left: 9px; border-left: 1px solid #555; color: #999; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.annotation-popover textarea { display: block; width: 100%; min-height: 76px; max-height: 180px; padding: 8px 0; background: transparent; border: 0; outline: 0; resize: vertical; color: #eee; font-size: 13px; line-height: 1.6; }
+.annotation-popover textarea::placeholder { color: #777; }
+.annotation-popover textarea:focus-visible { outline: 0; }
+.annotation-popover-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 11px; }
+.annotation-popover-actions button { min-height: 28px; color: #999; }
+.annotation-popover-actions button[type=submit] { margin-left: auto; color: #eee; }
+.annotation-popover-actions button:hover, .annotation-popover-heading button:hover { color: #fff; }
+.annotation-popover-error { margin: 8px 0 0; color: #ccc; font-size: 11px; line-height: 1.5; }

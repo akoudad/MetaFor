@@ -6,6 +6,7 @@ import SpatialWorld from "./SpatialWorld";
 import NavigationRail from "./NavigationRail";
 import SpaceMap from "./SpaceMap";
 import TopicCard from "./TopicCard";
+import AnnotationComposer from "./AnnotationComposer";
 import { getDepth, getPath } from "@/lib/model";
 import type { Conversation, SourceReference } from "@/lib/model";
 import { validateAnnotations } from "@/lib/ai";
@@ -49,9 +50,14 @@ export default function ConversationSpace() {
   const [positions, setPositions] = useState<Record<string, SpatialPoint>>({});
   const baseNodes = useMemo(() => layoutSpace(space), [space]);
   const nodes = useMemo(() => applyPositionOverrides(baseNodes, positions), [baseNodes, positions]);
-  const [annotationPair, setAnnotationPair] = useState<{ sourceId: string; replyId: string } | null>(null);
+  const [annotationPair, setAnnotationPair] = useState<{ sourceId: string; replyId: string; editing?: boolean } | null>(null);
   const [stageSize, setStageSize] = useState({ width: 1000, height: 700 });
-  const annotationFrame = useMemo(() => annotationPair ? annotationView(nodes, annotationPair.sourceId, annotationPair.replyId, stageSize.width, stageSize.height) : null, [nodes, annotationPair, stageSize]);
+  const annotationFrame = useMemo(() => {
+    if (!annotationPair) return null;
+    const frame = annotationView(nodes, annotationPair.sourceId, annotationPair.replyId, stageSize.width, stageSize.height);
+    const source = nodes.find((node) => node.id === annotationPair.sourceId);
+    return frame && !frame.paired && annotationPair.editing && source ? { ...frame, view: focusView(source.position, stageSize.width, stageSize.height), visibleIds: [source.id] } : frame;
+  }, [nodes, annotationPair, stageSize]);
   const presentedNodes = useMemo(() => annotationFrame ? applyPositionOverrides(nodes, annotationFrame.positions) : nodes, [nodes, annotationFrame]);
   const [overview, setOverview] = useState(false);
   const [choiceParentId, setChoiceParentState] = useState<string | null>(null);
@@ -69,6 +75,8 @@ export default function ConversationSpace() {
   const annotationsNow = useRef<AnnotationRequest[]>([]);
   const setAnnotations = useCallback((value: AnnotationRequest[]) => { annotationsNow.current = value; setAnnotationsState(value); }, []);
   const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
+  const [annotationEditor, setAnnotationEditor] = useState<string | null>(null);
+  const [annotationAnchor, setAnnotationAnchor] = useState<Range | null>(null);
   const selectionAction = useRef<HTMLButtonElement>(null);
   const selectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissedRange = useRef<Range | null>(null);
@@ -186,12 +194,17 @@ export default function ConversationSpace() {
     remember();
     const request = pendingNow.current?.request;
     const recovery = request ? { requestId: request.requestId, activeId: request.activeId, question: request.question, selection: request.selection, includeIds: request.includeIds, annotations: request.annotations } : undefined;
-    return { format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation: spaceNow.current, view: { activeId: activeNow.current, view: choiceNow.current ? saved.current[activeNow.current]?.view ?? viewNow.current : viewNow.current, overview: choiceNow.current ? false : overview, started: started || Boolean(request), places: { ...saved.current }, history: [...history.current], positions, ...(annotationPair && !overview && !choiceNow.current ? { annotationPair } : {}), ...(recovery ? { pending: recovery } : {}) } };
+    // Editing can temporarily reveal a source beside the draft's owning topic.
+    // Only a genuine source/reply pair belongs in the persisted reading view.
+    const savedPair = !annotationPair?.editing && annotationPair?.replyId === activeNow.current && spaceNow.current.explorations[annotationPair.replyId]?.source?.explorationId === annotationPair.sourceId ? annotationPair : null;
+    const savedView = choiceNow.current || (annotationPair && !savedPair) ? saved.current[activeNow.current]?.view ?? viewNow.current : viewNow.current;
+    return { format: "ingx", version: 1, savedAt: new Date().toISOString(), conversation: spaceNow.current, view: { activeId: activeNow.current, view: savedView, overview: choiceNow.current ? false : overview, started: started || Boolean(request), places: { ...saved.current }, history: [...history.current], positions, ...(savedPair && !overview && !choiceNow.current ? { annotationPair: savedPair } : {}), ...(recovery ? { pending: recovery } : {}) } };
   }, [remember, space, active.id, view, overview, started, positions, annotationPair]);
   const snapshotNow = useRef(snapshot);
   useLayoutEffect(() => { snapshotNow.current = snapshot; }, [snapshot]);
 
   const restore = (next: Snapshot) => {
+    setAnnotationEditor(null); setAnnotationAnchor(null);
     abort.current?.abort();
     markInteraction();
     setChoiceParent(null); setAnnotationPair(null);
@@ -320,6 +333,7 @@ export default function ConversationSpace() {
 
   const focus = useCallback((id: string, withSource = false) => {
     if (switchingNow.current || !space.explorations[id]) return;
+    setAnnotationEditor(null);
     remember(); markInteraction(); setChoiceParent(null);
     if (id !== activeId) pushHistory(activeId);
     const previous = saved.current[id];
@@ -340,6 +354,7 @@ export default function ConversationSpace() {
 
   const showOverview = useCallback(() => {
     if (switchingNow.current || overview) return;
+    setAnnotationEditor(null);
     remember(); markInteraction(); setChoiceParent(null);
     const { width, height } = size();
     setAnnotationPair(null); setCamera(fitOverview(nodes, width, height)); setStarted(true); setOverview(true);
@@ -349,6 +364,7 @@ export default function ConversationSpace() {
   const back = useCallback(() => {
     if (switchingNow.current) return;
     if (!choiceNow.current && !overview && !history.current.length) return;
+    setAnnotationEditor(null);
     markInteraction(); setAnnotationPair(null);
     if (choiceNow.current) { const id = choiceNow.current; focus(id); setCamera(saved.current[id]?.view ?? focusView(pointFor(id), size().width, size().height)); return; }
     if (overview) { setCamera(saved.current[activeId]?.view ?? focusView(pointFor(activeId), size().width, size().height)); setOverview(false); return; }
@@ -364,6 +380,7 @@ export default function ConversationSpace() {
 
   const activate = useCallback((id: string) => {
     if (switchingNow.current || id === activeId || !space.explorations[id]) return;
+    setAnnotationEditor(null);
     remember(); markInteraction(); setChoiceParent(null); setAnnotationPair(null); pushHistory(activeId);
     activeNow.current = id; setActiveId(id);
     setDraft(saved.current[id]?.draft ?? ""); setSelection(saved.current[id]?.selection ?? null); setAnnotations(saved.current[id]?.annotations ?? []); setIncludeIds([]); setNotice("");
@@ -748,15 +765,17 @@ export default function ConversationSpace() {
     hover.current = null; wheelAnchor.current = null;
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (switchingNow.current || (!draftNow.current.trim() && !annotationsNow.current.length) || !ready) return;
+  const submit = (event?: FormEvent, annotationOnly = false) => {
+    event?.preventDefault();
+    if (switchingNow.current || !ready) return;
+    if (!annotationOnly && selectionNow.current) { setAnnotationEditor("legacy"); return; }
     if (pendingNow.current) { setNotice("Retry or dismiss the unfinished question before sending another."); return; }
-    const text = draftNow.current.trim();
-    const source = selectionNow.current;
-    const batch = [...annotationsNow.current];
+    const source = annotationOnly ? selectionNow.current : null;
+    const text = annotationOnly && !source ? "" : draftNow.current.trim();
+    const batch = annotationOnly ? [...annotationsNow.current] : [];
+    if (!text && !batch.length) return;
     if (batch.length && source) {
-      if (!text) { setNotice("Write a question for the selected passage, or clear the selection."); composer.current?.focus(); return; }
+      if (!text) { setNotice("Write a question for the selected passage, or clear the selection."); return; }
       batch.push({ id: crypto.randomUUID(), source, question: text });
     }
     if (batch.length > 6 || batch.some((item) => !item.question.trim() || item.question.length > 8000) || batch.reduce((sum, item) => sum + item.question.length, 0) > 24000) {
@@ -771,8 +790,10 @@ export default function ConversationSpace() {
     const originId = batch.length ? activeNow.current : source?.explorationId ?? activeNow.current;
     const request: AnswerRequest = { requestId: crypto.randomUUID(), conversation: spaceNow.current, activeId: originId, question, selection: batch.length ? null : source, ...(batch.length ? { annotations: batch } : {}), mode: "auto", includeIds };
     // Submitted annotations belong to this request. New drafts remain independent.
-    setDraft(""); setSelection(null); setAnnotations([]); setIncludeIds([]);
-    saved.current[activeNow.current] = { ...saved.current[activeNow.current], draft: "", selection: null, annotations: [] };
+    if (!annotationOnly || source) setDraft("");
+    if (annotationOnly) { setSelection(null); setAnnotations([]); setAnnotationEditor(null); }
+    setIncludeIds([]);
+    saved.current[activeNow.current] = { ...saved.current[activeNow.current], draft: draftNow.current, selection: selectionNow.current, annotations: annotationsNow.current };
     setStarted(true);
     if (!started) setCamera(focusView(pointFor(originId), size().width, size().height));
     void runRequest({ request, navigation: navigation.current });
@@ -791,6 +812,15 @@ export default function ConversationSpace() {
   const dismissPending = () => { abort.current?.abort(); setPending(null); setNotice(""); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = []; unreadTargets.current.clear(); };
   const composerKeydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+  };
+  const changeQuestion = (value: string) => {
+    markInteraction();
+    if (selectionNow.current) {
+      if (annotationsNow.current.length >= 6) { setNotice("Send your saved annotations before starting another question."); return; }
+      setAnnotations([...annotationsNow.current, { id: crypto.randomUUID(), source: selectionNow.current, question: draftNow.current }]);
+      setSelection(null); setAnnotationEditor(null);
+    }
+    setDraft(value);
   };
 
   const resetLayout = () => {
@@ -866,23 +896,25 @@ export default function ConversationSpace() {
     setSpace((current) => ({ ...current, connections: current.connections?.map((link) => link.id === id ? { ...link, status: "accepted" } : link) }));
   };
   const dismissConnection = (id: string) => { if (switchingNow.current) return; setSpace((current) => ({ ...current, connections: current.connections?.filter((link) => link.id !== id) })); };
-  const queueAnnotation = () => {
-    const source = selectionNow.current;
-    const question = draftNow.current.trim();
-    if (!source || !question) return false;
-    if (annotationsNow.current.length >= 6) { setNotice("Send these six annotations before adding another."); return false; }
-    setAnnotations([...annotationsNow.current, { id: crypto.randomUUID(), source, question }]);
-    setSelection(null); setDraft("");
-    return true;
-  };
-  const chooseSection = (source: SourceReference) => {
+  const chooseSection = (source: SourceReference, anchor: Range | null = null) => {
     if (switchingNow.current) return;
     markInteraction();
-    if (selectionNow.current && draftNow.current.trim() && !queueAnnotation()) return;
-    if (annotationsNow.current.length >= 6) { setNotice("Send these six annotations before adding another."); return; }
     if (choiceNow.current) resumeTopic(source.explorationId);
-    else if (!annotationsNow.current.length && source.explorationId !== activeId) activate(source.explorationId);
-    setSelection(source); setNotice(""); composer.current?.focus();
+    else if (!annotationsNow.current.length && !selectionNow.current && source.explorationId !== activeId) activate(source.explorationId);
+    // Older files stored a selected-passage draft in the normal composer.
+    // Preserve it as an independent annotation before opening another passage.
+    let batch = annotationsNow.current.filter((item) => item.id !== annotationEditor || item.question.trim());
+    if (selectionNow.current) {
+      if (batch.length >= 6) { setNotice("Send these six annotations before adding another."); return; }
+      batch = [...batch, { id: crypto.randomUUID(), source: selectionNow.current, question: draftNow.current }];
+      setAnnotations(batch);
+      setSelection(null); setDraft("");
+    }
+    const existing = batch.find((item) => JSON.stringify(item.source) === JSON.stringify(source));
+    if (!existing && batch.length >= 6) { setNotice("Send these six annotations before adding another."); return; }
+    const entry = existing ?? { id: crypto.randomUUID(), source, question: "" };
+    setAnnotations(existing ? batch : [...batch, entry]);
+    setAnnotationAnchor(anchor); setAnnotationEditor(entry.id); setNotice("");
   };
   const openSource = (source: SourceReference) => {
     if (switchingNow.current) return;
@@ -910,11 +942,44 @@ export default function ConversationSpace() {
     };
     readerFocusFrame.current = requestAnimationFrame(reveal);
   };
-  const selectedMessage = selection && space.explorations[selection.explorationId]?.messages.find((message) => message.id === selection.messageId);
-  const selectionLabel = selection?.quote ?? selectedMessage?.sections.find((section) => section.id === selection?.sectionId)?.title;
+  const editAnnotation = (id: string) => {
+    const source = id === "legacy" ? selectionNow.current : annotationsNow.current.find((item) => item.id === id)?.source;
+    if (!source || switchingNow.current) return;
+    markInteraction(); setChoiceParent(null); setOverview(false);
+    if (source.explorationId !== activeNow.current) {
+      const frame = annotationView(nodes, source.explorationId, activeNow.current, size().width, size().height);
+      if (frame) {
+        setAnnotationPair({ sourceId: source.explorationId, replyId: activeNow.current, editing: true });
+        setCamera(frame.paired ? frame.view : focusView(pointFor(source.explorationId), size().width, size().height));
+      }
+    } else {
+      const node = readers.current.get(source.explorationId)?.closest<HTMLElement>("[data-node-id]");
+      if (node?.dataset.detail !== "full" || node.style.visibility !== "visible") setCamera(focusView(pointFor(source.explorationId), size().width, size().height));
+    }
+    setAnnotationAnchor(null); setAnnotationEditor(id);
+    const generation = navigation.current;
+    const deadline = performance.now() + 2200;
+    const reveal = () => {
+      readerFocusFrame.current = null;
+      if (navigation.current !== generation || performance.now() > deadline) return;
+      const reader = readers.current.get(source.explorationId);
+      const node = reader?.closest<HTMLElement>("[data-node-id]");
+      const section = reader?.querySelector<HTMLElement>(`[data-section-id="${CSS.escape(source.sectionId)}"]`);
+      if (reader && section && node?.dataset.detail === "full" && !node.inert && node.style.visibility === "visible") {
+        const scale = reader.getBoundingClientRect().height / reader.offsetHeight;
+        const rect = section.getBoundingClientRect(), bounds = reader.getBoundingClientRect();
+        if (scale > 0 && (rect.top < bounds.top || rect.top > bounds.bottom - 40)) reader.scrollTop += (rect.top - bounds.top) / scale - 12;
+        return;
+      }
+      readerFocusFrame.current = requestAnimationFrame(reveal);
+    };
+    readerFocusFrame.current = requestAnimationFrame(reveal);
+  };
+  const editingAnnotation = annotations.find((item) => item.id === annotationEditor);
+  const editorSource = editingAnnotation?.source ?? (annotationEditor === "legacy" ? selection : null);
   const suggestions = (space.connections ?? []).filter((link) => link.from === activeId || link.to === activeId);
 
-  return <main className={`space ${annotations.length ? "has-annotations" : ""}`} aria-busy={switching}>
+  return <main className={`space${annotations.length ? " has-annotation-drafts" : ""}`} aria-busy={switching}>
     <header className="topbar">
       <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metafor</button>
       <div className="top-actions">
@@ -950,7 +1015,7 @@ export default function ConversationSpace() {
     <input ref={fileInput} className="sr-only" type="file" accept=".ingx,application/json" onChange={importFile} aria-label="Import conversation file" />
     <div ref={stage} data-choice-parent={choiceParentId ?? undefined} className={`world-stage ${dragging ? "is-dragging" : ""}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyUp={(event) => { if (event.shiftKey) captureSelection(true); }}>
       <SpatialWorld nodes={started ? presentedNodes : []} links={started ? links : []} activeId={overview || choiceParentId ? undefined : activeId} view={view} reducedMotion={reducedMotion} onViewChange={rememberRenderedView} transition={transition} visibleIds={choiceIds ?? annotationFrame?.visibleIds} fullDetailIds={annotationFrame?.visibleIds} compact={overview || Boolean(choiceParentId)}>
-        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={selection} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} graphChoice={Boolean(choiceParentId && choices.some((item) => item.id === node.id))} onFocus={() => choiceNow.current ? resumeTopic(node.id) : focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={(id) => focus(id, true)} onExplore={() => exploreChildren(node.id)} onSource={openSource} readingRef={(element) => {
+        {(node) => <TopicCard key={node.id} space={space} item={space.explorations[node.id]} active={node.id === activeId} selection={editorSource ?? selection} onEditAnnotation={editAnnotation} annotations={annotations.length ? annotations : pending?.request.annotations} pendingQuestion={pending?.request.activeId === node.id ? pending.request.annotations?.map((item, index) => `${index + 1}. ${item.question}`).join("\n") ?? pending.request.question : undefined} pendingError={pending?.request.activeId === node.id ? pending.error : undefined} onRetry={() => { if (pending) void runRequest(pending); }} onCancel={cancel} onDismiss={dismissPending} graphChoice={Boolean(choiceParentId && choices.some((item) => item.id === node.id))} onFocus={() => choiceNow.current ? resumeTopic(node.id) : focus(node.id)} onHover={(id) => { hover.current = id; }} onSelect={chooseSection} onOpen={(id) => focus(id, true)} onExplore={() => exploreChildren(node.id)} onSource={openSource} readingRef={(element) => {
           if (element) { if (!readers.current.has(node.id)) element.scrollTop = saved.current[node.id]?.scrollTop ?? 0; readers.current.set(node.id, element); }
           else readers.current.delete(node.id);
         }} onScroll={(top) => {
@@ -962,7 +1027,7 @@ export default function ConversationSpace() {
       </SpatialWorld>
       {!started && <div className="welcome"><h1>What’s on your mind?</h1></div>}
     </div>
-    {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { chooseSection(selectionPreview.source); window.getSelection()?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
+    {selectionPreview && <button ref={selectionAction} type="button" className="selection-action" style={{ left: selectionPreview.x, top: selectionPreview.y }} onPointerDown={(event) => event.preventDefault()} onClick={() => { const chosen = window.getSelection(); chooseSection(selectionPreview.source, chosen?.rangeCount ? chosen.getRangeAt(0).cloneRange() : null); chosen?.removeAllRanges(); }}><span aria-hidden="true">↳</span> Ask about this</button>}
     {started && <nav className="exploration-controls" aria-label="Topic depth navigation">
       {overview ? <><span>Conversation overview · {nodes.length} topics</span><button onClick={() => resumeTopic(activeId)} aria-label={`Return to reading ${active.title}`}>Return to {active.title} ↗</button><span className="exploration-instruction">Choose any title to read</span></> : choiceParentId ? <><button onClick={() => resumeTopic(choiceParentId)} aria-label={`Read parent topic ${space.explorations[choiceParentId].title}`}>↑ {space.explorations[choiceParentId].title}</button><span>{choices.length} topics · Choose a title to read</span></> : <><button onClick={() => parent ? resumeTopic(parent.id) : showOverview()} aria-label={parent ? `Up to parent ${parent.title}` : "Up to conversation overview"}>↑ {parent?.title ?? "Overview"}</button>{childCount > 0 && <button onClick={() => exploreChildren(activeId)} aria-label={`Explore ${childCount} deeper ${childCount === 1 ? "topic" : "topics"}`}>Explore {childCount} {childCount === 1 ? "topic" : "topics"} ↓</button>}</>}
       {scrollHint && <span role="status">{scrollHint}</span>}
@@ -972,22 +1037,32 @@ export default function ConversationSpace() {
     {started && <SpaceMap nodes={presentedNodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
     <div className="composer-dock">
       {(notice || unreadId) && <p className="composer-notice" role="status">{notice || (pending?.error ? "An unfinished question needs your attention." : `Your answer is ready${unreadTopics.current.length ? ` in ${unreadTopics.current.length} ${unreadTopics.current.length === 1 ? "topic" : "topics"}` : ""}.`)}{unreadId && <button onClick={openUnread}>Open answer ↗</button>}<button onClick={() => { setNotice(""); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = []; }} aria-label="Dismiss notice">×</button></p>}
-      {annotations.length > 0 && <section className="annotation-queue" aria-label="Queued annotations">
-        <div className="annotation-queue-heading"><span>{annotations.length} {annotations.length === 1 ? "annotation" : "annotations"} ready</span><span>Select another passage to add</span></div>
-        <div className="annotation-queue-list">{annotations.map((item, index) => <div className="annotation-draft" key={item.id}>
-          <button className="annotation-number" aria-label={`Show source for annotation ${index + 1}`} onClick={() => openSource(item.source)}>{index + 1}</button>
-          <div><p>{item.source.quote ?? space.explorations[item.source.explorationId]?.messages.find((message) => message.id === item.source.messageId)?.sections.find((section) => section.id === item.source.sectionId)?.title ?? "Selected section"}</p><textarea aria-label={`Question for annotation ${index + 1}`} value={item.question} rows={1} maxLength={8000} onChange={(event) => { markInteraction(); setAnnotations(annotationsNow.current.map((entry) => entry.id === item.id ? { ...entry, question: event.target.value } : entry)); }} /></div>
-          <button aria-label={`Remove annotation ${index + 1}`} onClick={() => { markInteraction(); setAnnotations(annotationsNow.current.filter((entry) => entry.id !== item.id)); }}>×</button>
-        </div>)}</div>
-        <button className="send-annotations" type="button" disabled={Boolean(pending && !pending.error)} onClick={() => composer.current?.form?.requestSubmit()}>Send {annotations.length + (selection && draft.trim() ? 1 : 0)} annotations ↑</button>
+      {annotations.length > 0 && <section className="annotation-tray" aria-label="Queued annotations">
+        <span>{annotations.length} {annotations.length === 1 ? "annotation" : "annotations"}</span>
+        <div>{annotations.map((item, index) => <span className="annotation-token" key={item.id}>
+          <button aria-label={`Edit annotation ${index + 1}`} title={item.question || "Write your annotation"} onClick={() => editAnnotation(item.id)}>{index + 1}. {item.question || "Write a question"}</button>
+          <button aria-label={`Remove annotation ${index + 1}`} onClick={() => { markInteraction(); setAnnotations(annotationsNow.current.filter((entry) => entry.id !== item.id)); if (annotationEditor === item.id) setAnnotationEditor(null); }}>×</button>
+        </span>)}</div>
+        <button type="button" disabled={Boolean(pending)} onClick={() => submit(undefined, true)}>Send {annotations.length} annotations ↑</button>
       </section>}
-      {selection && <div className="selection-chip"><span>About</span><p>{selectionLabel || "Selected section"}</p><button onClick={() => { markInteraction(); setSelection(null); }} aria-label="Clear selected passage">×</button></div>}
-      {selection && draft.trim() && <button className="queue-annotation" onClick={() => { markInteraction(); if (queueAnnotation()) setNotice("Select another passage, or send your annotation now."); }}>Add another annotation +</button>}
+      {selection && <button className="resume-annotation" onClick={() => editAnnotation("legacy")}>Resume annotation ↗</button>}
       {pending && !pending.error && <div className="generation-status"><span role="status" aria-live="polite">Thinking…</span><button type="button" onClick={cancel} aria-label="Stop generating">Stop</button></div>}
       {pending?.error && <div className="request-recovery" role="status"><span>Question paused</span><button type="button" onClick={() => focus(pending.request.activeId)}>View question</button><button type="button" onClick={() => void runRequest(pending)} aria-label="Retry unfinished question">Retry</button><button type="button" onClick={dismissPending} aria-label="Dismiss unfinished question">Dismiss</button></div>}
       {started && <div className="composer-context"><span>Asking about: {active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
-      <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={draft} onChange={(event) => { markInteraction(); setDraft(event.target.value); }} onKeyDown={composerKeydown} aria-label="Your question" placeholder={selection ? "Ask about this passage" : annotations.length ? "Optional instructions for these annotations" : "Ask anything"} rows={1} maxLength={8000} disabled={!ready || switching} />{draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
+      <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={selection ? "" : draft} onChange={(event) => changeQuestion(event.target.value)} onKeyDown={composerKeydown} aria-label="Your question" placeholder="Ask anything" rows={1} maxLength={8000} disabled={!ready || switching} />{!selection && draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
     </div>
+    {editorSource && !overview && !choiceParentId && <AnnotationComposer key={annotationEditor} source={editorSource} anchor={annotationAnchor} label={editorSource.quote ?? space.explorations[editorSource.explorationId]?.messages.find((item) => item.id === editorSource.messageId)?.sections.find((item) => item.id === editorSource.sectionId)?.title ?? "Selected passage"} value={editingAnnotation?.question ?? draft} count={annotations.length + (annotationEditor === "legacy" ? 1 : 0)} busy={Boolean(pending)} error={notice} onChange={(value) => {
+      markInteraction(); setNotice("");
+      if (editingAnnotation) setAnnotations(annotationsNow.current.map((item) => item.id === editingAnnotation.id ? { ...item, question: value } : item));
+      else setDraft(value);
+    }} onClose={() => { setAnnotationEditor(null); readers.current.get(editorSource.explorationId)?.focus({ preventScroll: true }); }} onAddAnother={() => {
+      markInteraction();
+      if (annotationEditor === "legacy" && selectionNow.current) {
+        if (annotationsNow.current.length >= 6) { setNotice("Send these six annotations before adding another."); return; }
+        setAnnotations([...annotationsNow.current, { id: crypto.randomUUID(), source: selectionNow.current, question: draftNow.current }]); setSelection(null); setDraft("");
+      }
+      setAnnotationEditor(null); readers.current.get(editorSource.explorationId)?.focus({ preventScroll: true });
+    }} onSubmit={() => submit(undefined, true)} />}
     {showAccess && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Demo access"><form className="access-panel" onKeyDown={(event) => {
       if (event.key !== "Tab") return;
       const fields = Array.from(event.currentTarget.elements).filter((field): field is HTMLElement => field instanceof HTMLElement && field.tabIndex >= 0 && !field.matches(":disabled"));

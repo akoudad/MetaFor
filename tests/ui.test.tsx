@@ -153,12 +153,25 @@ function fixture(activeId = "observatory"): Snapshot {
 }
 
 function result(request: AnswerRequest, decision: "branch" | "continue" = "branch"): AnswerResult {
-  return {
+  const response: AnswerResult = {
     requestId: request.requestId, decision, reason: "This detail deserves its own topic.",
     title: "Protect the roof", summary: "Use wind measurements to choose a roof.",
     sections: [{ title: "Use measured conditions", body: "Keep a record of local gusts and use it to compare roof designs." }],
     related: [], context: { fullIds: [request.activeId], summaryIds: [], truncated: false }, model: "test-model",
   };
+  if (request.annotations?.length) {
+    response.decision = "continue";
+    response.topics = request.annotations.map((annotation) => ({
+      annotationId: annotation.id, targetId: annotation.source.explorationId, decision,
+      title: decision === "continue" ? request.conversation.explorations[annotation.source.explorationId].title : response.title,
+      summary: response.summary, sections: response.sections,
+    }));
+  }
+  return response;
+}
+
+function annotationInput() {
+  return ui.screen.getByRole("textbox", { name: "Annotation question" }) as HTMLTextAreaElement;
 }
 
 async function open(snapshot?: Snapshot) {
@@ -247,7 +260,7 @@ test("selecting text offers an action without attaching context, calling the mod
   const before = activeTopic();
   previewPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, "wind exposure before choosing the roof");
   assert.ok(ui.screen.getByRole("button", { name: "Ask about this" }));
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   assert.equal(document.activeElement, reader);
   assert.equal(composer.value, "Keep my existing draft");
   assert.equal(activeTopic(), before);
@@ -257,7 +270,7 @@ test("selecting text offers an action without attaching context, calling the mod
   assert.equal(saved.view.places.weather.selection, null, "an uncommitted preview is not saved as question context");
 });
 
-test("Ask about this attaches the exact rendered quote, preserves the draft, and focuses the composer", async () => {
+test("Ask about this opens a local annotation while preserving the ordinary draft", async () => {
   const user = await open(fixture("weather"));
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
   await user.type(composer, "How does this affect my design?");
@@ -265,13 +278,14 @@ test("Ask about this attaches the exact rendered quote, preserves the draft, and
   previewPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
   await user.click(ui.screen.getByRole("button", { name: "Ask about this" }));
   assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
-  assert.equal(document.activeElement, composer);
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote);
+  assert.equal(document.activeElement, annotationInput());
+  assert.equal(annotationInput().value, "");
   assert.equal(composer.value, "How does this affect my design?");
   assert.equal(requests.length, 0);
   ui.fireEvent.pageHide(window);
   const saved = (await storage.loadSnapshot("ui-observatory"))!;
-  assert.deepEqual(saved.view.places.weather.selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
+  assert.deepEqual(saved.view.places.weather.annotations?.[0].source, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
   assert.equal(saved.view.places.weather.draft, "How does this affect my design?");
 });
 
@@ -288,7 +302,7 @@ test("a cross-message selection removes an earlier preview and cannot attach a s
   selection.removeAllRanges(); selection.addRange(range);
   ui.fireEvent.pointerUp(second, { pointerId: 1, button: 0 });
   assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   assert.equal(requests.length, 0);
 });
 
@@ -311,10 +325,10 @@ test("one selected passage can cross sections of the same answer without includi
   assert.ok(action, `Expected a same-answer selection action. Native range text: ${nativeText}`);
   await user.click(action);
   const quote = "wind exposure before choosing the roof. Keep a log of storms. How to compare Use the same measurement height";
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote);
   ui.fireEvent.pageHide(window);
   const saved = (await storage.loadSnapshot("ui-observatory"))!;
-  assert.deepEqual(saved.view.places.weather.selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", endSectionId: "wind-meaning", quote });
+  assert.deepEqual(saved.view.places.weather.annotations?.[0].source, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", endSectionId: "wind-meaning", quote });
   assert.equal(requests.length, 0);
 });
 
@@ -356,7 +370,7 @@ test("textarea selection changes cannot revive a stale answer-selection action",
   await ui.act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
   assert.equal(document.activeElement, composer);
   assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   assert.equal(composer.value, "Keep editing this draft");
   assert.equal(requests.length, 0);
 });
@@ -388,7 +402,7 @@ test("selection previews dismiss on Escape, outside pointer, scrolling, resize, 
   await user.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
   dismissed();
   assert.equal(activeTopic(), "Go to Choose equipment");
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   assert.equal(requests.length, 0);
 });
 
@@ -397,8 +411,9 @@ test("section Ask controls still attach a source directly without submitting a q
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
   await user.type(composer, "Keep this draft");
   await user.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, "Watch the wind");
-  assert.equal(document.activeElement, composer);
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, "Watch the wind");
+  assert.equal(document.activeElement, annotationInput());
+  assert.equal(annotationInput().value, "");
   assert.equal(composer.value, "Keep this draft");
   assert.equal(ui.screen.queryByRole("button", { name: "Ask about this" }), null);
   assert.equal(requests.length, 0);
@@ -703,14 +718,15 @@ test("reloading during a fork restores the parent reading view, passage, draft, 
   assert.equal(saved.view.overview, false);
   assert.equal(saved.view.places.observatory.scrollTop, 315);
   assert.equal(saved.view.places.observatory.draft, "Compare these site constraints");
-  assert.deepEqual(saved.view.places.observatory.selection, before.view.places.observatory.selection);
+  assert.deepEqual(saved.view.places.observatory.annotations, before.view.places.observatory.annotations);
   ui.cleanup();
   await open();
   assert.equal(document.querySelector(".world-stage[data-choice-parent]"), null);
   assert.equal(activeTopic(), "Go to Plan an observatory");
   assert.equal(readerFor("observatory").scrollTop, 315);
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Compare these site constraints");
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, "weather, access");
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, "weather, access");
   assert.equal(requests.length, 0);
 });
 
@@ -911,19 +927,19 @@ test("an exact passage from an older arbitrary answer becomes the new branch sou
   const paragraph = document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!;
   const quote = "wind exposure before choosing the roof";
   selectPassage(paragraph, quote);
-  await ui.waitFor(() => assert.equal(document.querySelector(".selection-chip p")?.textContent, quote));
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "How should this change the design?{Enter}");
+  await ui.waitFor(() => assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote));
+  await user.type(annotationInput(), "How should this change the design?{Enter}");
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
   assert.equal(requests.length, 1);
   assert.equal(requests[0].activeId, "weather");
   assert.equal(requests[0].mode, "auto");
-  assert.deepEqual(requests[0].selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
+  assert.deepEqual(requests[0].annotations?.[0].source, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
   assert.equal(document.querySelector(".topic.is-focused .source-quote p")?.textContent, quote);
   ui.fireEvent.pageHide(window);
   const saved = await storage.loadSnapshot("ui-observatory");
   const branch = saved!.conversation.explorations[saved!.view.activeId];
   assert.equal(branch.parentId, "weather", `Saved active topic: ${saved!.view.activeId}; topics: ${Object.keys(saved!.conversation.explorations).join(", ")}`);
-  assert.deepEqual(branch.source, requests[0].selection);
+  assert.deepEqual(branch.source, requests[0].annotations?.[0].source);
 });
 
 test("a deferred answer preserves navigation and a draft edited in another topic", async () => {
@@ -999,14 +1015,15 @@ test("remounting restores the draft, passage, reader position, and positioned to
   await open();
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote);
   assert.equal(document.querySelector<HTMLDivElement>('[data-topic="weather"] .topic-reading')!.scrollTop, 315);
   await ui.waitFor(() => assert.equal(document.querySelector<HTMLElement>('[data-node-id="weather"]')!.style.transform, transform));
   ui.fireEvent.pageHide(window);
   const restored = await storage.loadSnapshot("ui-observatory");
   assert.deepEqual(restored!.view.positions, initial.view.positions);
   assert.equal(restored!.view.places.weather.scrollTop, 315);
-  assert.deepEqual(restored!.view.places.weather.selection, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
+  assert.deepEqual(restored!.view.places.weather.annotations?.[0].source, { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote });
   assert.equal(requests.length, 0);
 });
 
@@ -1061,7 +1078,7 @@ test("a crowded conversation keeps keyboard navigation, long-answer outlines, an
   assert.equal(outline.getAttribute("aria-expanded"), "false");
   const quote = "Keep the original measurement notes for section 5.";
   selectPassage(section.querySelector(".answer-markdown p")!, quote);
-  await ui.waitFor(() => assert.equal(document.querySelector(".selection-chip p")?.textContent, quote));
+  await ui.waitFor(() => assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote));
   const draft = "Help me compare this measurement";
   await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), draft);
   await user.click(ui.screen.getByRole("button", { name: "Conversation map" }));
@@ -1069,7 +1086,8 @@ test("a crowded conversation keeps keyboard navigation, long-answer outlines, an
   await user.click(ui.screen.getByRole("button", { name: "Return to previous view" }));
   assert.equal(activeTopic(), "Go to Field notes 32");
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote);
   assert.equal(requests.length, 0);
 });
 
@@ -1140,7 +1158,7 @@ test("a slow valid import disables composing until it restores the imported work
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Go to Choose equipment" }));
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
   assert.equal(activeTopic(), "Go to Weather records", "pending storage transitions must also block keyboard-activated navigation");
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   assert.equal(requests.length, 0);
   assert.equal(composer.value, "Keep the original draft");
   await ui.act(async () => { resolveFile(storage.serializeSnapshot(incoming)); });
@@ -1177,12 +1195,14 @@ test("a failed slow import re-enables composing without replacing the current dr
 });
 
 
-test("automatic continuation retains its source and can be explored without placement controls", async () => {
+test("legacy annotation continuation retains its source and can be explored without placement controls", async () => {
   answer = (request) => Response.json(result(request, requests.length === 1 ? "continue" : "branch"));
-  const user = await open(fixture());
-  await user.click(ui.screen.getByRole("button", { name: "Go to Weather records" }));
-  selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, "wind exposure before choosing the roof");
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Clarify the roof recommendation{Enter}");
+  const initial = fixture("weather");
+  const source = { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote: "wind exposure before choosing the roof" };
+  initial.view.places.weather = { view: initial.view.view, scrollTop: 0, draft: "Clarify the roof recommendation", selection: source };
+  const user = await open(initial);
+  await user.click(ui.screen.getByRole("button", { name: /Resume annotation/ }));
+  await user.type(annotationInput(), "{Enter}");
   await ui.waitFor(() => assert.ok(document.querySelector(`[data-message-id="answer-${requests[0].requestId}"]`)));
   assert.equal(activeTopic(), "Go to Weather records");
   assert.equal(ui.screen.queryByRole("combobox", { name: "Answer placement" }), null);
@@ -1190,17 +1210,18 @@ test("automatic continuation retains its source and can be explored without plac
   assert.equal(ui.screen.queryByText(/Opened a branch|Continued here/), null);
   const quote = "record of local gusts";
   selectPassage(document.querySelector(`[data-message-id="answer-${requests[0].requestId}"] .answer-markdown p`)!, quote);
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explore measuring those gusts{Enter}");
+  await user.type(annotationInput(), "Explore measuring those gusts{Enter}");
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Protect the roof"));
   assert.ok(requests.every((request) => request.mode === "auto"));
-  assert.equal(requests[1].selection?.messageId, `answer-${requests[0].requestId}`);
-  assert.equal(requests[1].selection?.quote, quote);
+  assert.deepEqual(requests[0].selection, source);
+  assert.equal(requests[1].annotations?.[0].source.messageId, `answer-${requests[0].requestId}`);
+  assert.equal(requests[1].annotations?.[0].source.quote, quote);
   ui.fireEvent.pageHide(window);
   const snapshot = storage.parseSnapshot(storage.serializeSnapshot((await storage.loadSnapshot("ui-observatory"))!));
   const continued = snapshot.conversation.explorations.weather.messages.find((message) => message.id === `answer-${requests[0].requestId}`)!;
   assert.deepEqual(continued.source, requests[0].selection);
   assert.equal(continued.sections[0].body, result(requests[0]).sections[0].body);
-  assert.deepEqual(snapshot.conversation.explorations[snapshot.view.activeId].source, requests[1].selection);
+  assert.deepEqual(snapshot.conversation.explorations[snapshot.view.activeId].source, requests[1].annotations?.[0].source);
 });
 
 test("New chat preserves previous content and drafts in Saved chats", async () => {
@@ -1217,7 +1238,7 @@ test("New chat preserves previous content and drafts in Saved chats", async () =
   const preserved = (await storage.loadSnapshot(initial.conversation.id))!;
   assert.deepEqual(preserved.conversation, initial.conversation);
   assert.equal(preserved.view.places.weather.draft, draft);
-  assert.equal(preserved.view.places.weather.selection?.quote, quote);
+  assert.equal(preserved.view.places.weather.annotations?.[0].source.quote, quote);
   const freshDraft = "A different unfinished question";
   await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), freshDraft);
   await user.click(ui.screen.getByRole("button", { name: "Saved chats" }));
@@ -1225,7 +1246,8 @@ test("New chat preserves previous content and drafts in Saved chats", async () =
   await user.click(await ui.within(savedPanel).findByRole("button", { name: /^Plan an observatory/ }));
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, draft);
-  assert.equal(document.querySelector(".selection-chip p")?.textContent, quote);
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, quote);
   const library = await storage.listSnapshots();
   assert.equal(library.length, 2);
   const fresh = (await storage.loadSnapshot(library.find((item) => item.id !== initial.conversation.id)!.id))!;
@@ -1283,7 +1305,7 @@ test("Reset layout clears saved manual positions while retaining content and rea
   assert.equal(reset.view.activeId, "weather");
   assert.deepEqual(reset.conversation, initial.conversation);
   assert.equal(reset.view.places.weather.draft, draft);
-  assert.equal(reset.view.places.weather.selection?.quote, quote);
+  assert.equal(reset.view.places.weather.annotations?.[0].source.quote, quote);
   assert.equal(reset.view.places.weather.scrollTop, 315);
   assert.notDeepEqual(reset.view.view, moved.view.view);
   ui.cleanup(); await open();
@@ -1327,7 +1349,7 @@ test("an automatically separated topic links to its parent without inventing a s
   assert.equal(document.querySelector(".topic.is-focused .source-quote"), null);
   await user.click(ui.screen.getByRole("button", { name: "Back to Weather records ↗" }));
   await ui.waitFor(() => assert.equal(activeTopic(), "Go to Weather records"));
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   ui.fireEvent.pageHide(window);
   const saved = (await storage.loadSnapshot("ui-observatory"))!;
   const child = Object.values(saved.conversation.explorations).find((item) => item.messages.some((message) => message.requestId === requests[0].requestId))!;
@@ -1422,20 +1444,21 @@ test("submission clears immediately while its card and captured passage retain t
   const quote = "wind exposure before choosing the roof";
   selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  const local = annotationInput();
   const question = "How do I measure this?";
-  await user.type(composer, `${question}{Enter}`);
-  assert.equal(composer.value, "", "submission must clear before the answer resolves");
-  assert.equal(document.querySelector(".selection-chip"), null);
-  assert.equal(document.querySelector(".pending-answer .original-question")?.textContent, question);
-  assert.equal(requests[0].selection?.quote, quote);
-  assert.equal(document.activeElement, composer);
+  await user.type(local, `${question}{Enter}`);
+  assert.equal(ui.screen.queryByRole("textbox", { name: "Annotation question" }), null, "submitted editor closes before the answer resolves");
+  assert.equal(composer.value, "");
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
+  assert.equal(document.querySelector(".pending-answer .original-question")?.textContent, `1. ${question}`);
+  assert.equal(requests[0].annotations?.[0].source.quote, quote);
 
   // A next draft with identical words is still a separate draft. Old response
   // cleanup must not erase it, and Enter must not submit it while unresolved.
   await user.type(composer, `${question}{Enter}`);
   assert.equal(requests.length, 1);
   await ui.act(async () => { resolveAnswer(Response.json(result(requests[0]))); });
-  await ui.screen.findByText("Your answer is ready.", { exact: false });
+  await ui.screen.findByText("Your answer is ready", { exact: false });
   assert.equal(composer.value, question);
   assert.equal(activeTopic(), "Go to Weather records");
   ui.fireEvent.pageHide(window);
@@ -1488,12 +1511,12 @@ test("reload preserves an unfinished question and another topic's draft without 
   const user = await open(fixture("weather"));
   const quote = "wind exposure before choosing the roof";
   selectPassage(document.querySelector('[data-section-id="wind-notes"] .answer-markdown p')!, quote);
-  await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Explain this exact passage{Enter}");
+  await user.type(annotationInput(), "Explain this exact passage{Enter}");
   await user.click(ui.screen.getByRole("button", { name: "Focus topic: Choose equipment" }));
   await user.type(ui.screen.getByRole("textbox", { name: "Your question" }), "Next equipment question");
   ui.fireEvent.pageHide(window);
   const before = await storage.loadSnapshot("ui-observatory");
-  assert.equal(before!.view.pending?.question, "Explain this exact passage");
+  assert.equal(before!.view.pending?.annotations?.[0].question, "Explain this exact passage");
   assert.equal(before!.view.places.weather.draft, "");
   assert.equal(before!.view.places.equipment.draft, "Next equipment question");
   ui.cleanup();
@@ -1503,12 +1526,12 @@ test("reload preserves an unfinished question and another topic's draft without 
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Next equipment question");
   await user.click(ui.screen.getByRole("button", { name: "Open answer ↗" }));
   assert.equal(activeTopic(), "Go to Weather records");
-  answer = (request) => Response.json(result(request, "continue"));
+  answer = (request) => Response.json(result(request));
   await user.click(ui.screen.getByRole("button", { name: "Retry" }));
   await ui.waitFor(() => assert.equal(document.querySelector(".pending-answer"), null));
   assert.equal(requests[1].question, requests[0].question);
   assert.equal(requests[1].requestId, requests[0].requestId);
-  assert.deepEqual(requests[1].selection, requests[0].selection);
+  assert.deepEqual(requests[1].annotations, requests[0].annotations);
   await user.click(ui.screen.getByRole("button", { name: "Focus topic: Choose equipment" }));
   assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Next equipment question");
 });
@@ -1651,7 +1674,7 @@ test("navigation regression: visiting a source does not attach it to the next qu
   await ui.waitFor(() => assert.ok(document.querySelector('[data-section-id="choose-site"].source-revealed')));
   const composer = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
   assert.equal(composer.value, "Compare all the options");
-  assert.equal(document.querySelector(".selection-chip"), null);
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
   assert.equal((await currentSnapshot("ui-observatory")).view.places.observatory.selection, null);
   await user.type(composer, "{Enter}");
   await ui.waitFor(() => assert.equal(requests.length, 1));

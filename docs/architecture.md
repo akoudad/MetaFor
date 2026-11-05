@@ -116,12 +116,19 @@ reply can revisit a topic without creating a circular message dependency.
 App-assigned IDs preserve existing answer text.
 
 Text selection first creates a temporary, range-positioned action. Choosing
-**Ask about this** commits its validated source reference and focuses the composer.
-Writing a question and selecting another passage queues the first annotation.
-The explicit **Add another annotation** action does the same. Queued questions
-can be edited or removed before sending, and unfinished queues are saved. One
-selected question still supports the legacy selection request; a queued batch
-sends separate annotation IDs, sources and questions. The preview is not saved or sent. Selection-handle changes are debounced; scroll,
+**Ask about this** opens a small editor beside that passage, with independent
+question text stored in the annotation queue. The normal prompt stays unchanged.
+The editor follows the source while scrolling and fits the visual viewport.
+**Add another annotation** or closing the editor retains the draft; selecting
+another passage opens its own editor. Source markers and the compact draft tray
+reopen annotations for editing. Local Send submits the queue with separate IDs,
+sources, and questions, including a single annotation. Only submitted drafts are
+cleared. Editing a draft from another topic reveals its source without changing
+draft ownership; narrow layouts prioritize the source. This temporary editing
+view is not serialized as a source/reply relationship.
+Older files with a selection and prompt draft still offer Resume annotation
+and keep the legacy selection request. The preview is not saved or sent.
+Selection-handle changes are debounced; scroll,
 resize, navigation, or dismissal removes the action to avoid a stale screen anchor.
 
 ## Answer flow

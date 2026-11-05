@@ -239,7 +239,7 @@ function paragraph(section: string) {
 }
 
 function input() {
-  return ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  return (ui.screen.queryByRole("textbox", { name: "Annotation question" }) ?? ui.screen.getByRole("textbox", { name: "Your question" })) as HTMLTextAreaElement;
 }
 
 function annotatedResult(request: AnswerRequest): AnswerResult {
@@ -262,9 +262,9 @@ test("selecting another passage queues the first question and sends two exact an
   selectPassage(paragraph("wind-notes"), "wind exposure before choosing the roof");
   await user.type(input(), "Which wind measurements matter?");
   selectPassage(paragraph("rain-notes"), "Check drainage and record rainfall.");
-  assert.equal((ui.screen.getByRole("textbox", { name: "Question for annotation 1" }) as HTMLTextAreaElement).value, "Which wind measurements matter?");
+  assert.equal((await currentSnapshot("ui-observatory")).view.places.weather.annotations?.[0].question, "Which wind measurements matter?");
   assert.equal(input().value, "");
-  assert.equal(document.querySelector(".selection-chip")?.textContent?.includes("Check drainage and record rainfall."), true);
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent?.includes("Check drainage and record rainfall."), true);
   assert.equal(reader.scrollTop, 460);
   assert.equal(requests.length, 0);
   await user.type(input(), "How long should I record the rain?");
@@ -345,8 +345,9 @@ test("explicit annotation queue supports editing and queue-only submission with 
   await user.type(input(), "What should my log contain?");
   await user.click(ui.screen.getByRole("button", { name: "Add another annotation +" }));
   assert.equal(input().value, "");
-  assert.equal(document.querySelector(".selection-chip"), null);
-  const queued = ui.screen.getByRole("textbox", { name: "Question for annotation 1" });
+  assert.equal(document.querySelector(".annotation-popover-source"), null);
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  const queued = input();
   await user.clear(queued); await user.type(queued, "Which storm details should I record?");
   await user.click(ui.screen.getByRole("button", { name: "Send 1 annotations ↑" }));
   await ui.waitFor(() => assert.equal(requests.length, 1));
@@ -396,13 +397,17 @@ test("queued questions and the next selected draft survive reload without sendin
   await user.type(input(), "How often should I record it?");
   const saved = await currentSnapshot("ui-observatory");
   assert.equal(saved.view.places.weather.annotations?.[0].question, "How do I measure this?");
-  assert.equal(saved.view.places.weather.selection?.quote, "record rainfall");
-  assert.equal(saved.view.places.weather.draft, "How often should I record it?");
+  assert.equal(saved.view.places.weather.annotations?.[1].source.quote, "record rainfall");
+  assert.equal(saved.view.places.weather.annotations?.[1].question, "How often should I record it?");
+  assert.equal(saved.view.places.weather.draft, "");
   ui.cleanup();
-  await open();
-  assert.equal((ui.screen.getByRole("textbox", { name: "Question for annotation 1" }) as HTMLTextAreaElement).value, "How do I measure this?");
+  const restoredUser = await open();
+  assert.equal(ui.screen.queryByRole("dialog", { name: "Annotation" }), null);
+  await restoredUser.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(input().value, "How do I measure this?");
+  await restoredUser.click(ui.screen.getByRole("button", { name: "Edit annotation 2" }));
   assert.equal(input().value, "How often should I record it?");
-  assert.equal(document.querySelector(".selection-chip")?.textContent?.includes("record rainfall"), true);
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent?.includes("record rainfall"), true);
   assert.equal(readerFor("weather").scrollTop, 525);
   assert.equal(requests.length, 0);
 });
@@ -422,8 +427,10 @@ test("removing the last queued annotation keeps a cross-topic selected draft sav
   assert.equal(saved.view.places.weather.selection?.explorationId, "observatory");
   ui.cleanup();
   await open();
+  assert.equal(input().value, "", "restored legacy annotation stays separate from the normal prompt");
+  await user.click(ui.screen.getByRole("button", { name: /Resume annotation/ }));
   assert.equal(input().value, "Which equipment should I start with?");
-  assert.equal(document.querySelector(".selection-chip")?.textContent?.includes("the equipment you need"), true);
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent?.includes("the equipment you need"), true);
   assert.equal(requests.length, 0);
 });
 
@@ -436,7 +443,8 @@ test("an oversized whole-section annotation is kept editable instead of becoming
   await user.click(ui.screen.getByRole("button", { name: "Add another annotation +" }));
   await user.click(ui.screen.getByRole("button", { name: "Send 1 annotations ↑" }));
   assert.equal(requests.length, 0, "passage budgets must be checked before submission clears editable work");
-  assert.equal((ui.screen.getByRole("textbox", { name: "Question for annotation 1" }) as HTMLTextAreaElement).value, "Explain this long section");
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(input().value, "Explain this long section");
   const saved = await currentSnapshot("ui-observatory");
   assert.equal(saved.view.pending, undefined);
   assert.equal(saved.view.places.weather.annotations?.[0].question, "Explain this long section");
@@ -461,7 +469,7 @@ test("stopped annotation request and a new annotation draft reload independently
   ui.cleanup();
   const afterReload = await open();
   assert.equal(requests.length, 1);
-  assert.equal((ui.screen.getByRole("textbox", { name: "Question for annotation 1" }) as HTMLTextAreaElement).value, "A later question about rainfall");
+  assert.equal((await currentSnapshot("ui-observatory")).view.places.weather.annotations?.[0].question, "A later question about rainfall");
   assert.ok(ui.screen.getByRole("button", { name: "Retry" }));
   answer = (request) => Response.json(annotatedResult(request));
   await afterReload.click(ui.screen.getByRole("button", { name: "Retry" }));
@@ -469,6 +477,179 @@ test("stopped annotation request and a new annotation draft reload independently
   assert.equal(requests[1].requestId, original.requestId);
   assert.deepEqual(requests[1].annotations, original.annotations);
   await ui.waitFor(() => assert.ok(ui.screen.getByRole("button", { name: "Open answer ↗" })));
-  assert.equal((ui.screen.getByRole("textbox", { name: "Question for annotation 1" }) as HTMLTextAreaElement).value, "A later question about rainfall");
+  assert.equal((await currentSnapshot("ui-observatory")).view.places.weather.annotations?.[0].question, "A later question about rainfall");
 });
 
+test("local annotation submission preserves the ordinary prompt and exact source", async () => {
+  const user = await open(fixture("weather"));
+  answer = () => new Promise<Response>(() => {});
+  const ordinary = ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement;
+  await user.type(ordinary, "Compare all the sites later");
+  const reader = readerFor("weather");
+  reader.scrollTop = 320; ui.fireEvent.scroll(reader);
+  selectPassage(paragraph("wind-notes"), "wind exposure");
+  const local = ui.screen.getByRole("textbox", { name: "Annotation question" }) as HTMLTextAreaElement;
+  assert.equal(document.activeElement, local);
+  assert.equal(local.closest('[role="dialog"]')?.getAttribute("aria-label"), "Annotation");
+  assert.equal(ordinary.value, "Compare all the sites later");
+  assert.equal(local.value, "");
+  await user.type(local, "Which instrument measures this?");
+  await user.click(ui.screen.getByRole("button", { name: "Send annotation" }));
+  await ui.waitFor(() => assert.equal(requests.length, 1));
+  assert.equal(requests[0].selection, null);
+  assert.equal(requests[0].question, "Answer each annotated question separately.");
+  assert.deepEqual(requests[0].annotations?.map(({ source, question }) => ({ source, question })), [{
+    source: { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote: "wind exposure" },
+    question: "Which instrument measures this?",
+  }]);
+  assert.equal(ordinary.value, "Compare all the sites later");
+  assert.equal(reader.scrollTop, 320);
+  const saved = await currentSnapshot("ui-observatory");
+  assert.equal(saved.view.places.weather.draft, "Compare all the sites later");
+  assert.equal(saved.view.places.weather.annotations?.length, 0);
+  assert.equal(saved.view.pending?.annotations?.[0].question, "Which instrument measures this?");
+});
+
+test("closing and reopening a local annotation retains its draft without navigating", async () => {
+  const user = await open(fixture("weather"));
+  selectPassage(paragraph("wind-notes"), "Keep a log of storms.");
+  await user.type(input(), "Which details should I record?");
+  await user.keyboard("{Escape}");
+  assert.equal(ui.screen.queryByRole("dialog", { name: "Annotation" }), null);
+  assert.equal(activeTopic(), "Weather records");
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(input().value, "Which details should I record?");
+  assert.equal(document.activeElement, input());
+  await user.click(ui.screen.getByRole("button", { name: "Close annotation" }));
+  assert.equal(ui.screen.queryByRole("dialog", { name: "Annotation" }), null);
+  await user.click(ui.screen.getByRole("button", { name: "Open annotation 1 at source" }));
+  assert.equal(input().value, "Which details should I record?");
+  assert.equal(document.activeElement, input());
+  assert.equal(activeTopic(), "Weather records");
+  assert.equal(requests.length, 0);
+  assert.equal((await currentSnapshot("ui-observatory")).view.places.weather.annotations?.[0].question, "Which details should I record?");
+});
+
+test("annotation Enter submits while Shift Enter and composition preserve editing", async () => {
+  const user = await open(fixture("weather"));
+  answer = () => new Promise<Response>(() => {});
+  await user.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
+  const local = input();
+  await user.type(local, "Explain the measurements");
+  await user.keyboard("{Shift>}{Enter}{/Shift}");
+  await user.type(local, "and compare instruments");
+  assert.equal(local.value, "Explain the measurements\nand compare instruments");
+  ui.fireEvent.keyDown(local, { key: "Enter", isComposing: true });
+  assert.equal(requests.length, 0);
+  await user.keyboard("{Enter}");
+  await ui.waitFor(() => assert.equal(requests.length, 1));
+  assert.equal(requests[0].annotations?.[0].question, "Explain the measurements\nand compare instruments");
+  assert.equal(requests[0].annotations?.[0].source.sectionId, "wind-notes");
+});
+
+test("editing a saved cross-topic annotation reveals its source without moving the draft owner", async () => {
+  const snapshot = fixture("observatory");
+  const source = { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote: "wind exposure" };
+  snapshot.view.places.observatory = {
+    view: snapshot.view.view, scrollTop: 230, selection: null, draft: "Keep my general question",
+    annotations: [{ id: "cross-topic-draft", source, question: "Which measurement matters?" }],
+  };
+  const user = await open(snapshot);
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  await ui.waitFor(() => assert.equal(document.activeElement, input()));
+  assert.equal(input().value, "Which measurement matters?");
+  assert.equal(activeTopic(), "Plan an observatory");
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Keep my general question");
+  const sourceNode = readerFor("weather").closest<HTMLElement>("[data-node-id]")!;
+  assert.equal(sourceNode.dataset.detail, "full");
+  assert.equal(sourceNode.style.visibility, "visible");
+  await user.type(input(), " Explain why.");
+  const saved = await currentSnapshot("ui-observatory");
+  assert.deepEqual(saved.view.places.observatory.annotations?.[0], { id: "cross-topic-draft", source, question: "Which measurement matters? Explain why." });
+  assert.equal(saved.view.places.observatory.scrollTop, 230);
+  assert.equal(requests.length, 0);
+});
+
+test("selecting a paired source respects that topic's six saved annotation limit", async () => {
+  const snapshot = fixture("equipment");
+  snapshot.conversation.explorations.equipment.parentId = "weather";
+  snapshot.conversation.explorations.equipment.source = { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote: "wind exposure" };
+  snapshot.view.annotationPair = { sourceId: "weather", replyId: "equipment" };
+  const queued = ["Measure", "wind exposure", "before choosing", "the roof.", "Keep a log", "of storms."].map((quote, index) => ({
+    id: `weather-note-${index}`, source: { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote }, question: `Explain passage ${index + 1}`,
+  }));
+  snapshot.view.places.weather = { view: snapshot.view.view, scrollTop: 170, selection: null, draft: "Keep the weather draft", annotations: queued };
+  const user = await open(snapshot);
+  await user.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
+  await ui.screen.findByText("Send these six annotations before adding another.");
+  assert.equal(activeTopic(), "Weather records");
+  assert.equal(ui.screen.queryByRole("dialog", { name: "Annotation" }), null);
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Keep the weather draft");
+  const saved = await currentSnapshot("ui-observatory");
+  assert.deepEqual(saved.view.places.weather.annotations, queued);
+  assert.equal(requests.length, 0);
+});
+
+test("a narrow cross-topic annotation editor keeps its source readable and its owner draft saved", async () => {
+  viewportWidth = 620;
+  const snapshot = fixture("observatory");
+  const source = { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote: "wind exposure" };
+  snapshot.view.places.observatory = {
+    view: snapshot.view.view, scrollTop: 260, selection: null, draft: "Compare all the sites",
+    annotations: [{ id: "narrow-source-note", source, question: "Which measurements matter?" }],
+  };
+  const user = await open(snapshot);
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  await ui.waitFor(() => assert.equal(document.activeElement, input()));
+  const sourceReader = readerFor("weather");
+  const sourceNode = sourceReader.closest<HTMLElement>("[data-node-id]")!;
+  const ownerNode = readerFor("observatory").closest<HTMLElement>("[data-node-id]")!;
+  assert.equal(sourceNode.dataset.detail, "full");
+  assert.equal(sourceNode.style.visibility, "visible", "the passage takes priority when two readable topics cannot fit");
+  assert.equal(ownerNode.style.visibility, "hidden", "the temporary source view does not squeeze both topics into a narrow viewport");
+  assert.equal(activeTopic(), "Plan an observatory", "the annotation stays in its original draft queue");
+  assert.equal(ui.fireEvent.wheel(sourceReader, { deltaY: 80, deltaMode: 0 }), true);
+  await user.type(input(), " Explain why.");
+  const saved = await currentSnapshot("ui-observatory");
+  assert.equal(saved.view.annotationPair, undefined, "temporary editing presentation never leaks into the saved reply pair");
+  assert.equal(saved.view.places.observatory.draft, "Compare all the sites");
+  assert.equal(saved.view.places.observatory.scrollTop, 260);
+  assert.deepEqual(saved.view.places.observatory.annotations?.[0], { id: "narrow-source-note", source, question: "Which measurements matter? Explain why." });
+  ui.cleanup();
+  await open();
+  assert.equal(activeTopic(), "Plan an observatory");
+  assert.equal(ui.screen.queryByRole("dialog", { name: "Annotation" }), null);
+  assert.equal(input().value, "Compare all the sites");
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 1" }));
+  assert.equal(input().value, "Which measurements matter? Explain why.");
+  assert.equal(readerFor("weather").closest<HTMLElement>("[data-node-id]")!.style.visibility, "visible");
+  assert.equal(requests.length, 0);
+});
+
+test("five queued annotations preserve a legacy draft when a seventh source exceeds the limit", async () => {
+  const snapshot = fixture("weather");
+  const queued = ["Measure", "wind exposure", "before choosing", "the roof.", "Keep a log"].map((quote, index) => ({
+    id: `legacy-limit-${index}`, source: { explorationId: "weather", messageId: "weather-answer-one", sectionId: "wind-notes", quote }, question: `Explain passage ${index + 1}`,
+  }));
+  const legacySource = { explorationId: "weather", messageId: "weather-answer-two", sectionId: "rain-notes", quote: "record rainfall" };
+  snapshot.view.places.weather = { view: snapshot.view.view, scrollTop: 190, selection: legacySource, draft: "How should I record it?", annotations: queued };
+  const user = await open(snapshot);
+  assert.equal(input().value, "", "the legacy selected question is not an ordinary draft");
+  await user.click(ui.screen.getByRole("button", { name: "Ask about Watch the wind" }));
+  await ui.screen.findByText("Send these six annotations before adding another.");
+  const saved = await currentSnapshot("ui-observatory");
+  const annotations = saved.view.places.weather.annotations!;
+  assert.equal(annotations.length, 6);
+  assert.deepEqual(annotations.slice(0, 5), queued);
+  assert.deepEqual(annotations[5].source, legacySource);
+  assert.equal(annotations[5].question, "How should I record it?");
+  assert.equal(saved.view.places.weather.selection, null);
+  assert.equal(saved.view.places.weather.draft, "");
+  assert.equal(ui.screen.queryByRole("dialog", { name: "Annotation" }), null, "the new seventh source is not opened or saved");
+  ui.cleanup();
+  await open();
+  await user.click(ui.screen.getByRole("button", { name: "Edit annotation 6" }));
+  assert.equal(input().value, "How should I record it?");
+  assert.equal(document.querySelector(".annotation-popover-source")?.textContent, "record rainfall");
+  assert.equal(requests.length, 0);
+});

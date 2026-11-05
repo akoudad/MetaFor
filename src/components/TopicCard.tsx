@@ -11,6 +11,7 @@ type TopicCardProps = {
   graphChoice?: boolean;
   selection: SourceReference | null;
   annotations?: AnnotationRequest[];
+  onEditAnnotation?: (id: string) => void;
   pendingQuestion?: string;
   pendingError?: string;
   readingRef: (element: HTMLDivElement | null) => void;
@@ -83,7 +84,7 @@ export default function TopicCard(props: TopicCardProps) {
         <div data-message-id={message.id} data-exploration-id={item.id}>
           {message.sections.map((section) => <section className={`answer-section ${selection?.messageId === message.id && selection.sectionId === section.id ? "selected" : ""}`} data-section-id={section.id} key={section.id}>
             {section.title && <h3><span>{section.title}</span><button className="section-ask" aria-label={`Ask about ${section.title}`} data-no-selection onClick={() => props.onSelect({ explorationId: item.id, messageId: message.id, sectionId: section.id })}>↗</button></h3>}
-            {props.annotations?.map((annotation, index) => annotation.source.explorationId === item.id && annotation.source.messageId === message.id && annotation.source.sectionId === section.id ? <span key={annotation.id} className="source-annotation-marker" data-no-selection title={annotation.question}>[{index + 1}]</span> : null)}
+            {props.annotations?.map((annotation, index) => annotation.source.explorationId === item.id && annotation.source.messageId === message.id && annotation.source.sectionId === section.id ? <button type="button" key={annotation.id} className="source-annotation-marker" data-no-selection title={annotation.question || "Write an annotation"} aria-label={`Open annotation ${index + 1} at source`} onClick={() => props.onEditAnnotation?.(annotation.id)}>[{index + 1}]</button> : null)}
             <AnswerBody text={section.body} />
             {getSectionChildren(space, section.id).map((child) => <button className="branch-link" key={child.id} data-no-selection onClick={() => props.onOpen(child.id)}>{child.title} <span>↗</span></button>)}
           </section>)}
