@@ -2,6 +2,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { AnswerRequest, ModelStatus } from "./contracts";
 import { ANSWER_SCHEMA, AnswerError, MAX_REQUEST_BYTES, answerMessages, buildAnswerContext, validateAnswerOutput, validateAnswerRequest } from "./ai";
+import { reasoningEffort } from "./reasoning";
 import { ORGANIZER_SCHEMA, organizerMessages, organizeAnswer } from "./organizer";
 
 type Environment = Record<string, string | undefined>;
@@ -35,7 +36,9 @@ function configuration(env: Environment) {
   if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) || url.username || url.password || url.search || url.hash) {
     throw new AnswerError("invalid_configuration", "The model endpoint is not configured correctly.", 503);
   }
-  return { apiKey, endpoint: `${url.toString().replace(/\/+$/, "")}/chat/completions`, model: modelName(env) };
+  let effort;
+  try { effort = reasoningEffort(env.MODEL_API_REASONING_EFFORT); } catch { throw new AnswerError("invalid_configuration", "The model reasoning setting is invalid.", 503); }
+  return { apiKey, effort, endpoint: `${url.toString().replace(/\/+$/, "")}/chat/completions`, model: modelName(env) };
 }
 
 async function limitedJson(message: Request | Response, maximum: number, tooLarge: AnswerError, invalid: AnswerError, signal?: AbortSignal) {
@@ -92,7 +95,7 @@ export async function generateAnswer(request: AnswerRequest, options: ProviderOp
           messages,
           response_format: { type: "json_schema", json_schema: { name, strict: true, schema } },
           max_completion_tokens: maximumTokens,
-          reasoning_effort: "low",
+          reasoning_effort: config.effort,
           store: false,
           stream: false,
         }),
@@ -116,8 +119,14 @@ export async function generateAnswer(request: AnswerRequest, options: ProviderOp
       try { answer = JSON.parse(choice.message.content); } catch { throw invalid; }
       return answer;
     };
-    const rawAnswer = await complete(answerMessages(request, context), ANSWER_SCHEMA, "metafor_answer", 6000);
+    // Fast already asks the writer for a complete graph plan. Keep that model's
+    // validated plan instead of paying for another serial placement review.
+    const singlePass = config.model === DEFAULT_MODEL && config.effort === "minimal";
+    const messages = answerMessages(request, context);
+    if (singlePass) messages[0].content += "\n\nYour output is the final answer and topic organization; no separate organizer will revise it. Use the topics and sourceIds fields to represent independently explorable subjects and syntheses as instructed above. Do not leave substantive independent subjects together in the overview expecting a later step to separate them.";
+    const rawAnswer = await complete(messages, ANSWER_SCHEMA, "metafor_answer", 6000);
     const answer = validateAnswerOutput(rawAnswer, request, context.record, config.model);
+    if (singlePass) return answer;
     const plan = await complete(organizerMessages(request, answer), ORGANIZER_SCHEMA, "metafor_organization", 3000);
     return organizeAnswer(plan, request, answer);
   } catch (error) {

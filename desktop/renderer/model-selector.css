@@ -1,0 +1,20 @@
+.model-selector { position: relative; width: fit-content; max-width: 100%; color: #a7a6b2; font: 12px/1.4 Arial, sans-serif; }
+.model-selector button { font: inherit; color: inherit; cursor: pointer; }
+.model-selector button:disabled { opacity: .55; cursor: default; }
+.model-selector-trigger { display: flex; align-items: center; gap: 7px; max-width: 100%; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; }
+.model-selector-trigger:hover:not(:disabled), .model-selector-trigger[aria-expanded="true"] { color: #eee; background: #ffffff0a; }
+.model-selector button:focus-visible { outline: 2px solid #a3b5df; outline-offset: 2px; }
+.model-selector-popover { position: absolute; z-index: 30; bottom: calc(100% + 8px); left: 0; width: 304px; max-width: calc(100vw - 40px); padding: 10px; border: 1px solid #ffffff21; border-radius: 12px; background: #151519; box-shadow: 0 10px 36px #0008; }
+.model-selector-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px; color: #d5d4dc; }
+.model-selector-heading button { border: 0; background: none; padding: 2px 6px; font-size: 18px; }
+.model-selector [role="option"] { display: block; width: 100%; padding: 10px; border: 0; border-radius: 7px; text-align: left; background: transparent; }
+.model-selector [role="option"]:hover, .model-selector [aria-selected="true"] { background: #ffffff0c; }
+.model-option-name { display: flex; justify-content: space-between; gap: 12px; color: #f1f0f5; }
+.model-option-name > span { color: #b5b4c3; }
+.model-option-description { display: block; margin-top: 4px; color: #a2a1af; line-height: 1.45; }
+.model-selector-popover p { margin: 8px 5px; font-size: 12px; line-height: 1.5; }
+.model-selector-error { color: #e9b8b3; }
+.model-selector-error button { margin-left: 6px; border: 0; background: transparent; text-decoration: underline; }
+.model-selector-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 4px 0; margin-top: 4px; border-top: 1px solid #ffffff10; font-size: 10px; color: #8f8e9b; }
+.model-selector-footer button { padding: 2px 0; border: 0; background: none; font-size: 11px; }
+.desktop-chat .composer-dock > .model-selector { margin: 6px 0 0 46px; }

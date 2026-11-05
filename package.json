@@ -75,10 +75,11 @@
       "entitlements": "desktop/entitlements.plist",
       "entitlementsInherit": "desktop/entitlements.plist",
       "extendInfo": {
-        "NSScreenCaptureUsageDescription": "Select a screen region to discuss with Metafor Help. Only your approved crop is sent when you press Send."
+        "NSScreenCaptureUsageDescription": "Metafor Help captures your current display when invoked and when you ask a question. Each question shares its screen snapshot with your configured AI provider. Selecting a region is optional."
       },
       "binaries": [
-        "Contents/Resources/app.asar.unpacked/native/source-info"
+        "Contents/Resources/app.asar.unpacked/native/source-info",
+        "Contents/Resources/app.asar.unpacked/native/guidance-observer"
       ]
     },
     "dmg": {

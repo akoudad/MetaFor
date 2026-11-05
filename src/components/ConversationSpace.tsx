@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, FormEvent, KeyboardEvent, PointerEvent } from "react";
+import type { ChangeEvent, CSSProperties, FormEvent, KeyboardEvent, PointerEvent, ReactNode } from "react";
 import SpatialWorld from "./SpatialWorld";
 import NavigationRail from "./NavigationRail";
 import SpaceMap from "./SpaceMap";
+import ConversationPanel from "./ConversationPanel";
 import TopicCard from "./TopicCard";
 import AnnotationComposer from "./AnnotationComposer";
 import { getDepth, getPath } from "@/lib/model";
@@ -33,6 +34,7 @@ export type DesktopChatBridge = {
   onConversationChanged: (id: string) => void;
   openHelp: () => void;
   openSettings: () => void;
+  renderModelSelector?: (busy: boolean) => ReactNode;
 };
 
 function selectedAnswerText(range: Range): string {
@@ -102,6 +104,7 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
   const [menu, setMenu] = useState(false);
   const [savedChats, setSavedChats] = useState(false);
   const [connections, setConnections] = useState(false);
+  const [composerClearance, setComposerClearance] = useState<number | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [pending, setPendingState] = useState<Pending | null>(null);
@@ -125,6 +128,7 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
   const stage = useRef<HTMLDivElement>(null);
   const spatialScroll = useRef<SpatialScrollState | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const composerDock = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const saved = useRef<Record<string, SavedPlace>>({});
   const history = useRef<string[]>([]);
@@ -165,6 +169,21 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
   const pointFor = useCallback((id: string) => presentedNodes.find((node) => node.id === id)?.position ?? { x: 0, y: 0, z: 0 }, [presentedNodes]);
   const size = () => ({ width: stage.current?.clientWidth ?? 1000, height: stage.current?.clientHeight ?? 700 });
   const setCamera = (next: SpatialPoint) => { viewNow.current = next; setView(next); };
+  useLayoutEffect(() => {
+    const element = composerDock.current;
+    if (!element) return;
+    const measure = () => {
+      const height = element.getBoundingClientRect().height;
+      if (!height) return;
+      const bottom = Number.parseFloat(getComputedStyle(element).bottom) || 0;
+      setComposerClearance(Math.ceil(height + bottom + 22));
+    };
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
   useEffect(() => { viewNow.current = view; activeNow.current = activeId; spaceNow.current = space; }, [view, activeId, space]);
   useEffect(() => {
     const measure = () => { const next = size(); setStageSize((previous) => previous.width === next.width && previous.height === next.height ? previous : next); };
@@ -438,7 +457,7 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
     setCamera(next);
     const { width, height } = size();
     const scale = height / (2 * Math.tan(25 * Math.PI / 180) * (next.z - point.z));
-    const fullThreshold = Math.min(0.72, Math.max(0.1, (width - 32) / 600 * 0.9));
+    const fullThreshold = Math.min(0.72, Math.max(0.1, Math.min((width - 32) / CARD_WIDTH * 0.9, height / CARD_HEIGHT * 0.8)));
     if (!annotationFrame && delta < 0 && scale >= fullThreshold) activate(id);
     setOverview(false);
   }, [activeId, activate, pointFor, annotationFrame]);
@@ -568,6 +587,7 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
     const keydown = (event: globalThis.KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (event.defaultPrevented || switchingNow.current) return;
+      if (target instanceof Element && target.closest(".conversation-panel, .model-selector")) return;
       if (event.key === "Escape") {
         if (selectionPreview) { event.preventDefault(); dismissSelectionPreview(); return; }
         if (help || menu || savedChats || connections || showAccess) { setHelp(false); setMenu(false); setSavedChats(false); setConnections(false); setShowAccess(false); if (showAccess) composer.current?.focus(); }
@@ -1022,7 +1042,7 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
   const editorSource = editingAnnotation?.source ?? (annotationEditor === "legacy" ? selection : null);
   const suggestions = (space.connections ?? []).filter((link) => link.from === activeId || link.to === activeId);
 
-  return <main className={`space${annotations.length ? " has-annotation-drafts" : ""}`} aria-busy={switching}>
+  return <main className={`space${annotations.length ? " has-annotation-drafts" : ""}${started ? " has-conversation-reader" : ""}`} style={composerClearance === null ? undefined : { "--composer-clearance": `${composerClearance}px` } as CSSProperties} aria-busy={switching}>
     <header className="topbar">
       <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metafor</button>
       <div className="top-actions">
@@ -1079,8 +1099,11 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
     </nav>}
     {started && <div className="zoom-controls" aria-label="Spatial navigation"><button onClick={() => zoom(220)} aria-label="Zoom out">−</button><button onClick={() => zoom(-220)} aria-label="Zoom in">+</button><button onClick={() => focus(activeId)} aria-label="Center current topic">⌖</button></div>}
     {started && <NavigationRail items={Object.values(space.explorations)} activeId={activeId} onNavigate={focus} />}
-    {started && <SpaceMap nodes={presentedNodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />}
-    <div className="composer-dock">
+    {started && <div className="conversation-sidebar">
+      <ConversationPanel space={space} activeId={activeId} onInteraction={markInteraction} onNavigate={openSource} />
+      <SpaceMap nodes={presentedNodes} links={links} activeId={activeId} view={view} labels={Object.fromEntries(Object.values(space.explorations).map((item) => [item.id, item.title]))} onNavigate={focus} onOverview={showOverview} />
+    </div>}
+    <div className="composer-dock" ref={composerDock}>
       {(notice || unreadId) && <p className="composer-notice" role="status">{notice || (pending?.error ? "An unfinished question needs your attention." : `Your answer is ready${unreadTopics.current.length ? ` in ${unreadTopics.current.length} ${unreadTopics.current.length === 1 ? "topic" : "topics"}` : ""}.`)}{unreadId && <button onClick={openUnread}>Open answer ↗</button>}<button onClick={() => { setNotice(""); setUnreadId(null); setUnreadMessageId(null); unreadTopics.current = []; }} aria-label="Dismiss notice">×</button></p>}
       {annotations.length > 0 && <section className="annotation-tray" aria-label="Queued annotations">
         <span>{annotations.length} {annotations.length === 1 ? "annotation" : "annotations"}</span>
@@ -1095,6 +1118,7 @@ export default function ConversationSpace({ desktop }: { desktop?: DesktopChatBr
       {pending?.error && <div className="request-recovery" role="status"><span>Question paused</span><button type="button" onClick={() => focus(pending.request.activeId)}>View question</button><button type="button" onClick={() => void runRequest(pending)} aria-label="Retry unfinished question">Retry</button><button type="button" onClick={dismissPending} aria-label="Dismiss unfinished question">Dismiss</button></div>}
       {started && <div className="composer-context"><span>Asking about: {active.title}{includeIds.length ? ` · ${includeIds.length} included` : ""}</span></div>}
       <form className="composer" onSubmit={submit}><button className="orb-button" type="button" onClick={() => composer.current?.focus()} aria-label="Focus question input"><span className={`orb ${pending && !pending.error ? "is-thinking" : ""}`} /></button><textarea ref={composer} value={selection ? "" : draft} onChange={(event) => changeQuestion(event.target.value)} onKeyDown={composerKeydown} aria-label="Your question" placeholder="Ask anything" rows={1} maxLength={8000} disabled={!ready || switching} />{!selection && draft && <button className="send-button" type="submit" aria-label="Send question" disabled={Boolean(pending && !pending.error)}>↑</button>}</form>
+      {desktop?.renderModelSelector?.(Boolean(pending && !pending.error))}
     </div>
     {editorSource && !overview && !choiceParentId && <AnnotationComposer key={annotationEditor} source={editorSource} anchor={annotationAnchor} label={editorSource.quote ?? space.explorations[editorSource.explorationId]?.messages.find((item) => item.id === editorSource.messageId)?.sections.find((item) => item.id === editorSource.sectionId)?.title ?? "Selected passage"} value={editingAnnotation?.question ?? draft} count={annotations.length + (annotationEditor === "legacy" ? 1 : 0)} busy={Boolean(pending)} error={notice} onChange={(value) => {
       markInteraction(); setNotice("");

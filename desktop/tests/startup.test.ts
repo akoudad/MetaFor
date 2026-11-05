@@ -18,12 +18,12 @@ before(async () => {
   code = result.outputFiles[0].text;
 });
 
-async function start(directory: string, env: Record<string, string> = {}, failCredentialWrite = false, decryptedKey?: string | Promise<string>, encryption?: Promise<Buffer>) {
+async function start(directory: string, env: Record<string, string> = {}, failCredentialWrite = false, decryptedKey?: string | Promise<string>, encryption?: Promise<Buffer>, modelFixture = false) {
   const handlers = new Map<string, (...args: any[]) => any>();
   const windows: TestWindow[] = [];
   const alerts: string[] = [];
   const shortcuts = new Set<string>();
-  const providerRequests: { url: string; authorization: string | null }[] = [];
+  const providerRequests: { url: string; authorization: string | null; body?: any }[] = [];
   let initialized = Promise.resolve();
   let quit = false;
   const locations: Record<string, string> = { appData: directory, userData: directory };
@@ -38,7 +38,7 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
     constructor() { super(); windows.push(this); }
     async loadURL(url: string) { this.url = url; }
     isDestroyed() { return false; }
-    show() {} focus() {}
+    show() {} showInactive() {} hide() {} focus() {} setBounds() {}
     setVisibleOnAllWorkspaces() {}
   }
   const electron = {
@@ -56,7 +56,7 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
     globalShortcut: { isRegistered: (value: string) => shortcuts.has(value), register: (value: string) => { shortcuts.add(value); return true; }, unregister: (value: string) => shortcuts.delete(value), unregisterAll: () => shortcuts.clear() },
     dialog: { showErrorBox: (title: string) => alerts.push(title) },
     safeStorage: { decryptStringAsync: async () => { if (decryptedKey !== undefined) return { result: await decryptedKey, shouldReEncrypt: false }; throw new Error("private-native-keychain-error"); }, isAsyncEncryptionAvailable: async () => true, encryptStringAsync: async (value: string) => encryption ?? Buffer.from(`encrypted:${value}`) },
-    screen: { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1400, height: 900 } }) },
+    screen: { getAllDisplays: () => [], getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1400, height: 900 } }) },
     systemPreferences: { getMediaAccessStatus: () => "not-determined" },
     session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
   };
@@ -71,7 +71,17 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
     }, module: { exports: {} }, exports: {},
     __dirname: path.resolve("desktop"), process: { env: { METAFOR_USER_DATA: directory, ...env }, pid: process.pid },
     console, crypto: globalThis.crypto, Buffer, URL, Response, Headers, structuredClone, AbortController, TextDecoder, clearTimeout, setTimeout,
-    fetch: async (url: string, init?: RequestInit) => { providerRequests.push({ url: String(url), authorization: new Headers(init?.headers).get("authorization") }); return new Response("fixture provider unavailable", { status: 503 }); },
+    fetch: async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      providerRequests.push({ url: String(url), authorization: new Headers(init?.headers).get("authorization"), body });
+      if (!modelFixture) return new Response("fixture provider unavailable", { status: 503 });
+      if (String(url).endsWith("/models")) return Response.json({ data: [{ id: "muse-spark-1.3" }, { id: "muse-wonder-1.0" }] });
+      const schema = body.response_format.json_schema.name;
+      const answer = schema === "metafor_help" ? { answer: "A short explanation.", highlightIds: [], visualMarks: [] }
+        : schema === "metafor_organization" ? { reason: "One answer.", overview: "", primary: { decision: "continue", title: "Explanation", summary: "A short explanation.", sectionIds: ["s0"], sourceIds: [] }, topics: [] }
+        : { decision: "continue", reason: "One answer.", title: "Explanation", summary: "A short explanation.", sections: [{ title: "Explanation", body: "A short explanation." }], related: [] };
+      return Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(answer) } }] });
+    },
   });
   vm.runInContext(code, context);
   await initialized;
@@ -149,12 +159,20 @@ test("explicit owner import recovers warnings without a startup dialog", async (
 
 test("fresh profiles register the new default while saved user shortcuts remain unchanged", async () => profile(async (directory) => {
   const fresh = await start(directory);
-  assert.ok(fresh.shortcuts.has("CommandOrControl+Alt+Control+M"));
+  assert.ok(fresh.shortcuts.has("Alt+M"));
   assert.equal(Object.keys((await fresh.call("settings")).warnings).length, 0);
-  await writeFile(path.join(directory, "preferences.json"), JSON.stringify(valid));
-  const saved = await start(directory);
-  assert.ok(saved.shortcuts.has(valid.shortcut));
-  assert.equal((await saved.call("settings")).shortcut, valid.shortcut);
+  for (const shortcut of ["CommandOrControl+Alt+Control+M", "CommandOrControl+Alt+M"]) {
+    await writeFile(path.join(directory, "preferences.json"), JSON.stringify({ ...valid, shortcut }));
+    const migrated = await start(directory);
+    assert.ok(migrated.shortcuts.has("Alt+M"));
+    assert.equal((await migrated.call("settings")).shortcut, "Alt+M");
+  }
+  for (const shortcut of [valid.shortcut, "Alt+Space"]) {
+    await writeFile(path.join(directory, "preferences.json"), JSON.stringify({ ...valid, shortcut }));
+    const saved = await start(directory);
+    assert.ok(saved.shortcuts.has(shortcut));
+    assert.equal((await saved.call("settings")).shortcut, shortcut);
+  }
 }));
 
 
@@ -255,4 +273,45 @@ test("asynchronous key saves keep IPC responsive and exclude concurrent settings
   finish(Buffer.from("encrypted:replacement"));
   assert.equal((await saving).configured, true);
   assert.equal(await readFile(path.join(directory, "credential.enc"), "utf8"), "encrypted:replacement");
+}));
+
+test("model choice persists without touching credentials and routes Chat writer, organizer, and Help", async () => profile(async (directory) => {
+  const preferences = { ...valid, model: "muse-spark-1.3", baseURL: "https://api.meta.ai/v1" };
+  await writeFile(path.join(directory, "preferences.json"), JSON.stringify(preferences));
+  await writeFile(path.join(directory, "credential.enc"), "unchanged-encrypted-key");
+  const runtime = await start(directory, {}, false, "retained-key", undefined, true);
+  assert.equal((await runtime.call("settings")).reasoningEffort, "medium", "existing default becomes Balanced");
+  const exchange = emptyHelp();
+  exchange.source = { id: "source-1", appName: "Fixture", title: "Source", capturedAt: new Date().toISOString(), width: 10, height: 10, image: "data:image/png;base64,aGVsbG8=" };
+  await new HelpStore(path.join(directory, "Help")).save(exchange);
+  await runtime.call("open-help"); await runtime.call("resume-help", exchange.id);
+  const choices = await runtime.call("list-models");
+  assert.equal(choices.choices.length, 3);
+  assert.ok(!JSON.stringify(choices).includes("retained-key"));
+  for (const [id, model, effort] of [["spark-fast", "muse-spark-1.3", "minimal"], ["wonder-deep", "muse-wonder-1.0", "high"], ["spark-balanced", "muse-spark-1.3", "medium"]]) {
+    const selected = await runtime.call("select-model", id);
+    assert.equal(selected.model, model); assert.equal(selected.reasoningEffort, effort);
+    const conversation = createConversation();
+    const before = runtime.providerRequests.length;
+    const result = await runtime.call("api", { path: "/api/answer", body: { requestId: `model-${id}`, conversation, activeId: conversation.rootId, question: "Explain an idea", selection: null, mode: "auto", includeIds: [] } });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    await runtime.call("ask-help", { sessionId: exchange.id, question: "Explain this", marks: [] });
+    const actual = runtime.providerRequests.slice(before);
+    const expectedSchemas = id === "spark-fast"
+      ? ["metafor_answer", "metafor_help"]
+      : ["metafor_answer", "metafor_organization", "metafor_help"];
+    assert.deepEqual(actual.map((item) => item.body.response_format.json_schema.name), expectedSchemas);
+    assert.ok(actual.every((item) => item.body.model === model && item.body.reasoning_effort === effort));
+    const saved = JSON.parse(await readFile(path.join(directory, "preferences.json"), "utf8"));
+    assert.equal(saved.model, model); assert.equal(saved.reasoningEffort, effort);
+    assert.equal(saved.shortcut, preferences.shortcut);
+    assert.equal(await readFile(path.join(directory, "credential.enc"), "utf8"), "unchanged-encrypted-key");
+  }
+  const savedBefore = await readFile(path.join(directory, "preferences.json"), "utf8");
+  await assert.rejects(runtime.call("select-model", "imaginary-fast-model"), /not available/);
+  assert.equal(await readFile(path.join(directory, "preferences.json"), "utf8"), savedBefore);
+  assert.ok(runtime.windows.every((window) => window.sent.includes("metafor:settings-changed")), "both modes receive the selected model");
+  const relaunched = await start(directory, {}, false, "retained-key");
+  assert.equal((await relaunched.call("settings")).reasoningEffort, "medium");
+  assert.equal((await relaunched.call("settings")).model, "muse-spark-1.3");
 }));

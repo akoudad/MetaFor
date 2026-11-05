@@ -2,8 +2,9 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import ConversationSpace from "../../src/components/ConversationSpace";
 import type { DesktopChatBridge } from "../../src/components/ConversationSpace";
 import { loadSnapshot, parseSnapshot } from "../../src/lib/storage";
-import { mergeHelpSnapshot } from "../chat-transfer";
+import { mergeHelpSnapshotFromArchive } from "../chat-transfer";
 import SharedSource from "./SharedSource";
+import ModelSelector from "./ModelSelector";
 import { installDesktopFetch } from "../chat-fetch";
 import "../../src/app/globals.css";
 import "./chat.css";
@@ -33,9 +34,10 @@ export default function Chat() {
         incoming.savedAt = new Date().toISOString();
         return incoming;
       }
-      return mergeHelpSnapshot(await loadSnapshot(incoming.conversation.id), incoming);
+      return mergeHelpSnapshotFromArchive(await loadSnapshot(incoming.conversation.id), incoming, (id) => bridge.getHelp(id));
     },
     onConversationChanged: setConversationId,
+    renderModelSelector: (busy) => <ModelSelector disabled={busy} />,
     openHelp: () => { void bridge.openHelp().catch((error) => setSourceError(error instanceof Error ? error.message : "Could not open Help.")); },
     openSettings: () => { void bridge.openSettings().catch((error) => setSourceError(error instanceof Error ? error.message : "Could not open Settings.")); },
   }), [bridge]);

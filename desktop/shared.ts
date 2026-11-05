@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from "../src/lib/reasoning";
+
 export type VisualMark = {
   id: string;
   kind: "rect" | "arrow" | "point";
@@ -16,6 +18,7 @@ export type HelpSource = {
   title: string;
   width: number;
   height: number;
+  screenBounds?: { x: number; y: number; width: number; height: number; displayId: string };
 };
 
 export type HelpMessage = {
@@ -24,12 +27,15 @@ export type HelpMessage = {
   text: string;
   createdAt: string;
   marks?: VisualMark[];
+  sourceId?: string;
 };
 
 export type HelpSession = {
   id: string;
   title: string;
   source: HelpSource | null;
+  sources?: HelpSource[];
+  contextMode?: "screen" | "source";
   messages: HelpMessage[];
   createdAt: string;
   updatedAt: string;
@@ -43,12 +49,31 @@ export type HelpHistoryItem = {
 };
 
 export type CapturePayload = { image: string; width: number; height: number; displayId: string };
+export type GuidancePayload = {
+  source: HelpSource;
+  marks: VisualMark[];
+  answer: string;
+  /** Actual native content bounds; macOS can move a requested window below the menu bar. */
+  viewportBounds?: { x: number; y: number; width: number; height: number };
+  /** Visible Help window in screen points; labels must leave its controls clear. */
+  helpBounds?: { x: number; y: number; width: number; height: number };
+};
 export type CropRect = { x: number; y: number; width: number; height: number };
+export type ModelChoice = {
+  id: string;
+  model: string;
+  name: string;
+  mode: "Fast" | "Balanced" | "Deep";
+  reasoningEffort: ReasoningEffort;
+  description: string;
+};
+export type ModelCatalog = { choices: ModelChoice[]; message?: string };
 export type DesktopSettings = {
   configured: boolean;
   hasSavedKey?: boolean;
   credentialLoading?: boolean;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   baseURL: string;
   shortcut: string;
   shortcutRegistered: boolean;
@@ -61,19 +86,27 @@ export interface DesktopBridge {
   api(request: { path: "/api/status" | "/api/answer"; body?: unknown; requestId?: string }): Promise<{ status: number; body: unknown }>;
   cancelAnswer(requestId: string): Promise<void>;
   getSettings(): Promise<DesktopSettings>;
+  listModels(): Promise<ModelCatalog>;
+  selectModel(choiceId: string): Promise<DesktopSettings>;
   saveSettings(settings: { apiKey?: string; model: string; baseURL: string; shortcut: string }): Promise<DesktopSettings>;
   removeKey(): Promise<DesktopSettings>;
   openSettings(): Promise<void>;
   openHelp(): Promise<void>;
   hideHelp(): Promise<void>;
-  captureScreen(): Promise<void>;
+  setHelpLayout(layout: { expanded: boolean; height?: number }): Promise<void>;
+  captureScreen(mode?: "screen" | "region"): Promise<void>;
   getCapture(): Promise<CapturePayload | null>;
   selectCapture(rect: CropRect): Promise<void>;
   cancelCapture(): Promise<void>;
   getHelpSession(): Promise<HelpSession>;
   listHelp(): Promise<HelpHistoryItem[]>;
   getHelp(id: string): Promise<HelpSession | null>;
-  askHelp(request: { sessionId: string; question: string; marks: VisualMark[] }): Promise<HelpSession>;
+  askHelp(request: { sessionId: string; question: string; marks: VisualMark[]; refreshScreen?: boolean; sourceId?: string }): Promise<HelpSession>;
+  showGuidance(request: { sessionId: string; messageId: string }): Promise<void>;
+  getGuidance(): Promise<GuidancePayload | null>;
+  closeGuidance(): Promise<void>;
+  onGuidanceChanged?(callback: (visible: boolean) => void): () => void;
+  onGuidanceLayoutChanged?(callback: (payload: GuidancePayload) => void): () => void;
   cancelHelp(sessionId: string): Promise<void>;
   newHelp(): Promise<HelpSession>;
   resumeHelp(id: string): Promise<HelpSession>;

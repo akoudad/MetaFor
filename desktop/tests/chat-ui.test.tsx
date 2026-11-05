@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, test } from "node:test";
 import { JSDOM } from "jsdom";
 import { IDBFactory } from "fake-indexeddb";
-import { snapshotFromHelp, mergeHelpSnapshot } from "../chat-transfer";
+import { snapshotFromHelp, mergeHelpSnapshotFromArchive } from "../chat-transfer";
 import type { DesktopChatBridge } from "../../src/components/ConversationSpace";
 import type { AnswerRequest } from "../../src/lib/contracts";
+import type { HelpSession } from "../shared";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -18,6 +19,7 @@ let currentID: string;
 let desktop: DesktopChatBridge;
 let statusRequests: number;
 let answer: (request: AnswerRequest) => Promise<Response>;
+let nativeHelp: HelpSession | null;
 
 function globalValue(name: string, value: unknown) {
   if (!originals.has(name)) originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
@@ -42,7 +44,7 @@ before(async () => {
 
 beforeEach(() => {
   globalValue("indexedDB", new IDBFactory()); dom.window.localStorage.clear();
-  currentID = ""; statusRequests = 0;
+  currentID = ""; statusRequests = 0; nativeHelp = null;
   answer = async () => { throw new Error("Unexpected model request."); };
   globalValue("fetch", async (input: string, init?: RequestInit) => {
     if (input === "/api/status") { statusRequests += 1; return Response.json({ configured: true, model: "test-model", accessCodeRequired: false }); }
@@ -51,7 +53,7 @@ beforeEach(() => {
   });
   desktop = {
     onOpenConversation(callback) { deliver = callback; return () => { deliver = () => {}; }; },
-    async prepareImport(content) { const next = storage.parseSnapshot(content); return mergeHelpSnapshot(await storage.loadSnapshot(next.conversation.id), next); },
+    async prepareImport(content) { const next = storage.parseSnapshot(content); return mergeHelpSnapshotFromArchive(await storage.loadSnapshot(next.conversation.id), next, async () => nativeHelp); },
     onConversationChanged(id) { currentID = id; }, openHelp() {}, openSettings() {},
   };
 });
@@ -77,8 +79,43 @@ function incoming() {
 
 async function open() {
   ui.render(<ConversationSpace desktop={desktop} />);
+  await ui.waitFor(() => assert.ok(currentID));
   await ui.waitFor(() => assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).disabled, false));
 }
+
+test("a fresh native Chat profile starts empty and does not create a saved demo", async () => {
+  await open();
+  assert.ok(ui.screen.getByRole("heading", { name: "What’s on your mind?" }));
+  assert.equal(document.querySelectorAll("[data-topic]").length, 0);
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "");
+  assert.deepEqual(await storage.listSnapshots(), []);
+});
+
+test("reopening native Chat resumes its saved exchange and draft without resetting storage", async () => {
+  const saved = incoming();
+  saved.view.places.root = { view: saved.view.view, draft: "Keep this question across relaunch", selection: null, scrollTop: 0 };
+  await storage.saveSnapshot(saved);
+  for (let launch = 0; launch < 2; launch++) {
+    currentID = "";
+    await open();
+    assert.equal(currentID, saved.conversation.id);
+    assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, saved.view.places.root.draft);
+    assert.deepEqual((await storage.loadSnapshot(currentID))?.conversation, saved.conversation);
+    ui.cleanup();
+  }
+  assert.equal((await storage.listSnapshots()).length, 1);
+});
+
+test("legacy sample chats remain saved but never appear as a fresh native conversation", async () => {
+  const sample = incoming();
+  sample.conversation.kind = "sample";
+  await storage.saveSnapshot(sample);
+  await open();
+  assert.notEqual(currentID, sample.conversation.id);
+  assert.ok(ui.screen.getByRole("heading", { name: "What’s on your mind?" }));
+  assert.equal(document.querySelectorAll("[data-topic]").length, 0);
+  assert.deepEqual((await storage.loadSnapshot(sample.conversation.id))?.conversation, sample.conversation);
+});
 
 test("opening a Help exchange first saves the normal Chat draft and restores it through Saved chats", async () => {
   await open();
@@ -126,4 +163,27 @@ test("bad desktop transfers keep the current draft and settings changes refresh 
   const previous = statusRequests;
   ui.act(() => window.dispatchEvent(new Event("metafor-settings-changed")));
   await ui.waitFor(() => assert.equal(statusRequests, previous + 1));
+});
+
+test("a repeat Help handoff cleans generated source text while saving the user's current draft", async () => {
+  const capturedAt = "2026-11-05T02:00:00.000Z";
+  nativeHelp = {
+    id: "help-ui-source", title: "Explain this diagram", createdAt: capturedAt, updatedAt: capturedAt,
+    source: { id: "private-frame", appName: "Preview", title: "Diagram.pdf", capturedAt, image: "data:image/png;base64,aW1hZ2U=", width: 800, height: 600 },
+    messages: [{ id: "help-question", role: "user", text: "What do these arrows mean?", createdAt: capturedAt }, { id: "help-answer", role: "assistant", text: "The arrows show how information moves.", createdAt: capturedAt }],
+  };
+  const clean = snapshotFromHelp(nativeHelp);
+  const legacy = structuredClone(clean);
+  legacy.conversation.explorations.root.messages[0].sections.unshift({ id: "help-message-help-question-source", title: "Shared screen selection",
+    body: `Application: Preview\n\nWindow: Diagram.pdf\n\nCaptured: ${capturedAt}\n\nSource ID: private-frame` });
+  await storage.saveSnapshot(legacy);
+  await open();
+  ui.fireEvent.change(ui.screen.getByRole("textbox", { name: "Your question" }), { target: { value: "Keep this draft while cleaning" } });
+  ui.act(() => deliver(storage.serializeSnapshot(clean)));
+  await ui.waitFor(async () => {
+    const saved = await storage.loadSnapshot(nativeHelp!.id);
+    assert.equal(saved?.conversation.explorations.root.messages[0].sections.length, 1);
+    assert.equal(saved?.view.places.root.draft, "Keep this draft while cleaning");
+  });
+  assert.equal((ui.screen.getByRole("textbox", { name: "Your question" }) as HTMLTextAreaElement).value, "Keep this draft while cleaning");
 });

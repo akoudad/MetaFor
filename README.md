@@ -1,34 +1,53 @@
-# metafor
+# Metafor
 
-Explore an AI conversation by topic without losing your place.
+Metafor combines spatial AI conversations with screen assistance in a macOS app.
 
-Select a passage and click **Ask about this**. Write and send your annotation
-beside the passage; your normal question draft stays separate. Read its explanation,
-explore connected topics, and return to the original answer. Reading positions, drafts,
-and exact passage sources are preserved. Add questions to several passages and
-send them together for separate replies. On a wide screen, a focused reply opens
-beside its source.
+## Metafor Chat
 
-The model can keep a brief answer together, split substantial independent
-subjects, reuse existing topics, or combine ideas into a new synthesis topic.
-Synthesis links back to its inputs and keeps the originals. Placement is a model
-decision; it is not guaranteed to match your preferred grouping.
+Explore a conversation as connected topics. Ask follow-up questions about a
+selected passage, read related answers, and return to your previous reading
+position. The model organizes answers into topics and can connect a synthesis
+to its source topics.
 
-Scroll inside a topic to read; scroll in empty space to move toward details or
-back toward the overview. Choose a title when the conversation splits.
-**Back** restores your previous reading place. **Conversation map** shows the
-whole shape; hover a dot to see its title and click to jump. Drag topics to arrange
-them, or pinch to zoom. The controls above the question input show how to return
-to the parent, explore deeper topics, or resume reading from the overview.
-Chats save in your browser. Export `.ingx` to carry the
-conversation, connections, and view state together.
+A narrow conversation panel above **Conversation map** keeps the full exchange
+available in reading order. It scrolls independently; click an answer to reveal
+its section in the graph. Chats save locally. Export and import `.ingx` files to
+move conversations between the browser and Mac app.
 
-[Demo](docs/demo.md) · [Architecture](docs/architecture.md) ·
-[Deployment](docs/deployment.md) · [Release checks](docs/hackathon.md)
+## Metafor Help
 
-## Run locally
+Press **⌥M (Option + M)** to open a compact bar above your current app. Ask about
+your screen, select a region, or annotate a saved snapshot. Answers can include
+visual pointers over the original app. Use **Continue in Chat** to explore a
+Help exchange as connected topics.
 
-Requires Node.js 22 and a Meta Model API key.
+Normal questions capture the current screen and send it to your configured
+model. Annotations use their saved snapshot. Metafor does not continuously
+watch your screen or control other apps. Help history and screenshots stay in
+local storage; screenshots are not included in `.ingx` exports.
+
+## Run the Mac app
+
+Requires macOS, Node.js 22+, npm, and Apple's command-line developer tools
+(`swiftc`). Model answers require internet access and your own API key.
+
+```sh
+npm ci
+npm run desktop:dev
+```
+
+Open **Metafor → Settings…** (`⌘,`) and add your API key. Meta is the default
+provider. The model chooser applies to both Chat and Help. Allow macOS Screen
+Recording when using Help.
+
+Build an Apple silicon installer with `npm run desktop:dmg`. Output is in
+`artifacts/mac/`. The current build is ad-hoc signed, not Developer ID signed or
+notarized. See the [Mac app guide](docs/mac-app.md) for installation, permissions,
+storage, and build details.
+
+## Run the browser app
+
+The browser app provides Metafor Chat.
 
 ```sh
 npm ci
@@ -36,39 +55,19 @@ cp -n .env.example .env.local
 ```
 
 Set `MODEL_API_KEY` in `.env.local`, then run `npm run dev` and open
-[127.0.0.1:3000](http://127.0.0.1:3000).
-
-Each answer uses two sequential `muse-spark-1.3` calls: a writer produces content,
-then an organizer assigns its sections to topics. The app validates the plan
-before changing the conversation. Credentials stay on the server.
+[127.0.0.1:3000](http://127.0.0.1:3000). The API key stays on the server.
 
 ## Verify
 
 ```sh
 npm test
+npm run desktop:test
 npm run typecheck
 npm run build
-npm start
+npm run desktop:build
 ```
 
-Optional live checks make paid calls: `scripts/live-smoke.ts` uses up to six;
-`scripts/live-graph-smoke.ts` uses up to eight;
-`scripts/live-annotation-smoke.ts` uses six. Run them with `npx tsx` against a
-configured local server. See the [demo instructions](docs/demo.md).
-
-Voice, collaboration, and cloud sync are outside this build.
-
-## macOS app
-
-The separate `metafor-mac` worktree adds an Electron app with the same spatial
-Chat and a floating **Help** window for questions about a screen selection.
-Run `npm run desktop:dev`; package an Apple silicon installer with
-`npm run desktop:dmg`. Drag Metafor from the DMG into Applications and add your
-API key in Settings. This local build is ad-hoc signed, not Developer ID signed or notarized.
-
-Browser chats stay in the browser. Move them using `.ingx` export and
-**File → Import Conversation**. Help sends the approved frozen crop on Send
-and on follow-ups in its linked Chat; it does not continuously watch or control
-your computer. Help screenshots stay in desktop storage and are not included in
-`.ingx` exports. See the [Mac app guide](docs/mac-app.md) for setup, privacy,
-build commands, and current limits.
+[Conversation reader](docs/conversation-reader.md) ·
+[Model selection](docs/model-selection.md) ·
+[Architecture](docs/architecture.md) ·
+[Mac verification](docs/mac-verification.md)

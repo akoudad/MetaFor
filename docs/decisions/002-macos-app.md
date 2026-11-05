@@ -16,20 +16,43 @@ is a larger download and memory footprint.
 
 ## Help
 
-Reuse GP-Tea's explicit capture, region selection, coordinate normalization,
+Reuse GP-Tea's capture, optional region selection, coordinate normalization,
 annotation anchors, floating companion, and permission handling. Do not include
 its Accessibility execution engine, clicking, typing, AppleScript actions, or
-computer-control agent. The default shortcut is ⌃⌥⌘M and remains configurable. Adding Control avoids
-macOS's standard [minimize-all-windows shortcut](https://support.apple.com/en-us/102650).
-Registration failure reports global reservations; it cannot detect every
-application-specific shortcut. Existing saved shortcuts are preserved.
+computer-control agent. The default shortcut is **⌥M (Option + M)** and remains
+configurable. Registration failure reports global reservations; it cannot detect
+every application-specific shortcut. Migrate only our previous shipped defaults,
+preserving custom shortcuts. Option + Space is avoided because the user uses it
+for ChatGPT.
 
-The user activates Help, captures a still frame, selects a region, reviews it,
-optionally marks it, and presses Send. Only the selected crop is sent to the
-configured model. Follow-ups use that same frozen source until a new selection.
-No background capture, microphone, or continuous video stream is used.
+Invoking Help captures the current display automatically. A normal question
+refreshes that display and sends a still frame to the configured model. Selecting
+a region is optional. A separate first-use consent covers automatic full-display
+context; accepting the older region-only flow cannot enable it silently.
+Annotations and snapshot mode pin their source. Every message records its source
+ID; historical frames remain available for review and follow-ups. The model sees
+the current frame plus at most two relevant recent prior frames, with an 8 MiB
+budget for prior images. There is no continuous capture or microphone recording.
 
-Help sessions and source crops stay in the user's Application Support directory.
+Help uses a transparent, bottom-anchored prompt window that expands upward for
+answers. A separate transparent, nonfocusable window renders bounded normalized
+visual marks over the original application and passes mouse events through.
+It never displays the captured image as a replacement desktop. Saved images
+remain available through History or an answer's explicit source inspection.
+The primary bar never presents a captured image. Help keeps Chat hidden through
+screen refresh, Dock activation, and process reopening. Explicit Chat commands
+restore the existing Chat window and its state.
+
+Before displaying marks, a local frame comparison checks that the source region
+still matches. Target and nearby crops are checked separately; a bounded moving
+area elsewhere can be tolerated, while broad changes are rejected. This is an
+image comparison, not proof of semantic identity. It does not send another image
+to the provider. Changed or missing
+sources keep their text answer without placing stale pointers. Guidance clears
+after 12 seconds, on capture, and when Help closes. This does not track scrolling
+or moving elements continuously. No model output becomes a mouse or keyboard action.
+
+Help sessions and source snapshots stay in the user's Application Support directory.
 Conversations retain the existing .ingx format. Help source metadata and images
 remain separate attachments linked by conversation ID, available when continuing
 in Chat. Existing web chats transfer through the existing .ingx export/import.
@@ -65,6 +88,6 @@ verify the DMG after packaging.
 ## Verification
 
 Build and launch the actual .app; test Chat, saved .ingx migration, annotation
-follow-ups, explicit capture, crop and mark geometry, Help follow-ups, Help-to-Chat
+follow-ups, automatic capture, optional crop and mark geometry, Help follow-ups, Help-to-Chat
 handoff, relaunch persistence, denied permission, invalid credentials, cancellation,
 and shortcut registration. Keep signing/notarization status explicit in delivery.

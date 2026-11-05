@@ -4,7 +4,7 @@ import type { AnswerRequest } from "../src/lib/contracts";
 import { AnswerError, MAX_CONTEXT_CHARS, MAX_REQUEST_BYTES, answerMessages, buildAnswerContext, validateAnswerOutput, validateAnswerRequest } from "../src/lib/ai";
 import { createAnswerHandler, generateAnswer, getProviderStatus } from "../src/lib/provider";
 import { createSampleConversation } from "../src/lib/sample";
-import { createConversation } from "../src/lib/session";
+import { applyAnswer, createConversation } from "../src/lib/session";
 
 const testEnv = { MODEL_API_KEY: "unit-test-placeholder" };
 
@@ -733,4 +733,90 @@ test("existing syntheses can continue only with their accepted contributing sour
   assert.throws(() => validateAnswerOutput({ ...continued, sourceIds: ["equity", "compensation"] }, request, context.record, "test"), /synthesis/);
   request.conversation.connections[1].status = "suggested";
   assert.throws(() => validateAnswerOutput(continued, request, context.record, "test"), /synthesis/);
+});
+
+test("selected model and effort are frozen across writer and organizer requests", async () => {
+  const env = { ...testEnv, MODEL_API_MODEL: "muse-wonder-1.0", MODEL_API_REASONING_EFFORT: "high" };
+  const calls: { model: string; reasoning_effort: string }[] = [];
+  const result = await generateAnswer(input(), { env, fetch: async (_url, init) => {
+    calls.push(JSON.parse(String(init?.body)));
+    env.MODEL_API_MODEL = "muse-spark-1.3"; env.MODEL_API_REASONING_EFFORT = "minimal";
+    return successfulCompletion(init);
+  } });
+  assert.equal(result.model, "muse-wonder-1.0");
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.model === "muse-wonder-1.0" && call.reasoning_effort === "high"));
+  await assert.rejects(generateAnswer(input(), { env: { ...testEnv, MODEL_API_REASONING_EFFORT: "none" }, fetch: async () => { assert.fail("invalid effort must not reach provider"); } }), /reasoning setting is invalid/);
+});
+
+const fastEnv = { ...testEnv, MODEL_API_MODEL: "muse-spark-1.3", MODEL_API_REASONING_EFFORT: "minimal" };
+
+test("Fast keeps the model's split and synthesis in one validated call per answer", async () => {
+  const conversation = createConversation();
+  conversation.explorations.root.messages = [{ id: "overview", role: "assistant", sections: [{ id: "subjects", title: "Options", body: "Consider option A and option B." }] }];
+  const request: AnswerRequest = { ...input(), requestId: "fast-split", conversation, activeId: "root", question: "Explain each option in detail." };
+  const written = { ...answer(), title: "Options", sections: [{ title: "Overview", body: "Each option has its own details." }], topics: ["A", "B"].map((label) => ({
+    targetId: "root", decision: "branch", title: `Option ${label}`, summary: `Details for ${label}.`, sections: [{ title: "Tradeoffs", body: `Full details for ${label}.` }], sourceIds: [], annotationId: null,
+  })) };
+  const calls: string[] = [];
+  const fetcher = (output: unknown): typeof fetch => async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    calls.push(body.response_format.json_schema.name);
+    assert.equal(body.model, "muse-spark-1.3"); assert.equal(body.reasoning_effort, "minimal");
+    assert.equal(body.max_completion_tokens, 6000);
+    assert.match(body.messages[0].content, /no separate organizer will revise it/);
+    return completion(output);
+  };
+  const original = JSON.stringify(conversation);
+  const split = await generateAnswer(request, { env: fastEnv, fetch: fetcher(written) });
+  assert.deepEqual(split.topics?.map((topic) => topic.sections), written.topics.map((topic) => topic.sections));
+  const applied = applyAnswer(conversation, request, split);
+  assert.equal(applied.topicIds.length, 2);
+  assert.ok(applied.topicIds.every((id) => applied.conversation.explorations[id].parentId === "root"));
+  assert.equal(JSON.stringify(conversation), original);
+  const combine = { ...request, requestId: "fast-synthesis", conversation: applied.conversation, question: "Combine both options into one plan.", includeIds: applied.topicIds };
+  const merged = await generateAnswer(combine, { env: fastEnv, fetch: fetcher({ ...answer(), decision: "branch", sourceIds: applied.topicIds }) });
+  const result = applyAnswer(applied.conversation, combine, merged);
+  assert.deepEqual(result.conversation.connections?.filter((edge) => edge.to === result.destinationId && edge.type === "synthesis").map((edge) => edge.from), applied.topicIds);
+  assert.ok(applied.topicIds.every((id) => result.conversation.explorations[id] === applied.conversation.explorations[id]), "synthesis preserves its contributors");
+  assert.deepEqual(calls, ["metafor_answer", "metafor_answer"]);
+});
+
+test("Fast preserves annotation ownership and rejects missing or invented destinations without an organizer", async () => {
+  const request = validateAnswerRequest(annotatedInput());
+  const written = annotatedOutput(request);
+  let calls = 0;
+  const fetcher = (output: unknown): typeof fetch => async () => { calls++; return completion(output); };
+  const result = await generateAnswer(request, { env: fastEnv, fetch: fetcher(written) });
+  const applied = applyAnswer(request.conversation, request, result);
+  for (const [index, id] of applied.topicIds.entries()) {
+    assert.deepEqual(applied.conversation.explorations[id].source, request.annotations![index].source);
+    assert.equal(applied.conversation.explorations[id].messages[0].sections[0].body, request.annotations![index].question);
+  }
+  for (const invalid of [{ ...written, topics: [] }, { ...written, topics: [{ ...written.topics[0], targetId: "invented" }, written.topics[1]] }]) {
+    await assert.rejects(generateAnswer(request, { env: fastEnv, fetch: fetcher(invalid) }), AnswerError);
+  }
+  assert.equal(calls, 3, "one upstream call per request, including invalid replies");
+});
+
+test("Balanced, Deep and custom models retain the dedicated organizer", async () => {
+  for (const [model, effort] of [["muse-spark-1.3", "medium"], ["muse-wonder-1.0", "high"], ["custom-model", "minimal"]]) {
+    const calls: string[] = [];
+    await generateAnswer(input(), { env: { ...testEnv, MODEL_API_MODEL: model, MODEL_API_REASONING_EFFORT: effort }, fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      calls.push(body.response_format.json_schema.name);
+      assert.equal(body.model, model); assert.equal(body.reasoning_effort, effort);
+      return successfulCompletion(init);
+    } });
+    assert.deepEqual(calls, ["metafor_answer", "metafor_organization"]);
+  }
+});
+
+test("Fast still rejects truncated answers and cancellation without publishing partial output", async () => {
+  let calls = 0;
+  await assert.rejects(generateAnswer(input(), { env: fastEnv, fetch: async () => { calls++; return completion(answer(), "length"); } }), /incomplete/);
+  const controller = new AbortController();
+  await assert.rejects(generateAnswer(input(), { env: fastEnv, fetch: async () => { calls++; controller.abort(); return completion(); } }, controller.signal),
+    (error: unknown) => error instanceof AnswerError && error.code === "cancelled");
+  assert.equal(calls, 2);
 });

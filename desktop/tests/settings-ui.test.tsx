@@ -111,3 +111,28 @@ test("a retained key can be removed during unlock without clearing an unsaved re
   assert.ok(!ui.screen.queryByText(/Waiting for macOS Keychain/));
   assert.equal((ui.screen.getByLabelText("API key") as HTMLInputElement).value, "new-unsaved-key");
 });
+
+test("an unavailable startup shortcut is shown until a replacement registers", async () => {
+  settings = { ...settings, shortcut: "Alt+M", shortcutRegistered: false, warnings: {} };
+  let submitted: unknown;
+  bridge.saveSettings = async (value) => { submitted = value; return { ...settings, shortcut: value.shortcut, shortcutRegistered: true }; };
+  ui.render(<Settings onClose={() => closed++} />);
+  await ui.screen.findByText(/Help shortcut Alt\+M is unavailable/);
+  ui.fireEvent.change(ui.screen.getByLabelText("Help shortcut"), { target: { value: "Alt+Shift+M" } });
+  assert.ok(ui.screen.getByText(/Help shortcut Alt\+M is unavailable/), "an unsaved draft must not claim registration succeeded");
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
+  await ui.waitFor(() => assert.equal(closed, 1));
+  assert.equal((submitted as { shortcut: string }).shortcut, "Alt+Shift+M");
+  assert.ok(!ui.screen.queryByText(/Help shortcut .* is unavailable/));
+});
+
+test("saving with an unavailable shortcut keeps its warning visible", async () => {
+  settings = { ...settings, shortcutRegistered: false, warnings: {} };
+  bridge.saveSettings = async () => settings;
+  ui.render(<Settings onClose={() => closed++} />);
+  await ui.screen.findByText(/Help shortcut .* is unavailable/);
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
+  await ui.waitFor(() => assert.equal((ui.screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled, false));
+  assert.equal(closed, 0);
+  assert.ok(ui.screen.getByText(/Help shortcut .* is unavailable/));
+});

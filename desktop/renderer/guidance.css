@@ -1,0 +1,15 @@
+/* This surface floats over the real app; even the shared renderer roots must be clear. */
+html[data-desktop-surface="guidance"], html[data-desktop-surface="guidance"] body, html[data-desktop-surface="guidance"] #root { background: transparent !important; color-scheme: normal; overflow: hidden; pointer-events: none; }
+.metafor-guidance { position: fixed; inset: 0; overflow: hidden; background: transparent; color: #eefaff; pointer-events: none; user-select: none; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.metafor-guidance * { box-sizing: border-box; pointer-events: none; }
+.guidance-marks, .guidance-labels { position: absolute; inset: 0; width: 100%; height: 100%; }
+.guidance-marks { overflow: visible; }
+.guidance-mark rect, .guidance-mark line, .guidance-mark circle { vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+/* A dark keyline keeps the bright edge legible on white pages; the halo helps on dark ones. */
+.guidance-contrast > * { stroke: #102433; stroke-width: 6; }
+.guidance-accent { filter: drop-shadow(0 0 3px #69dfffcc) drop-shadow(0 0 8px #38bdf866); }
+.guidance-accent > * { stroke: #69dfff; stroke-width: 2.8; }
+.guidance-label { position: absolute; margin: 0; padding: 6px 9px; overflow: hidden; overflow-wrap: anywhere; color: #eefaff; background: #101c29f5; border: 1px solid #69dfff9e; border-radius: 5px; box-shadow: 0 2px 8px #0005, 0 0 10px #38bdf82e; font-size: 12px; line-height: 16px; white-space: pre-wrap; }
+.guidance-marks, .guidance-labels { animation: guidance-appear 180ms ease-out both; }
+@keyframes guidance-appear { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .guidance-marks, .guidance-labels { animation: none; } }

@@ -17,6 +17,7 @@ test("the real scene preserves readers, animates and interrupts arrivals, honors
   let time = 100;
   let observerDisconnected = false;
   let cleanup = () => {};
+  let viewport = { width: 1100, height: 780 };
 
   try {
     for (const key of ["document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver"] as const) install(key, dom.window[key]);
@@ -26,8 +27,8 @@ test("the real scene preserves readers, animates and interrupts arrivals, honors
     install("cancelAnimationFrame", (id: number) => frames.delete(id));
     install("ResizeObserver", class { observe() {} disconnect() { observerDisconnected = true; } });
     Object.defineProperty(dom.window.document, "visibilityState", { configurable: true, value: "visible" });
-    Object.defineProperty(dom.window.HTMLElement.prototype, "clientWidth", { get: () => 1100 });
-    Object.defineProperty(dom.window.HTMLElement.prototype, "clientHeight", { get: () => 780 });
+    Object.defineProperty(dom.window.HTMLElement.prototype, "clientWidth", { get: () => viewport.width });
+    Object.defineProperty(dom.window.HTMLElement.prototype, "clientHeight", { get: () => viewport.height });
     // Isolate camera/card lifecycle; cosmetic canvas drawing has no role here.
     Object.defineProperty(dom.window.HTMLCanvasElement.prototype, "getContext", { value: () => null });
     const ui = await import("@testing-library/react");
@@ -216,6 +217,19 @@ test("the real scene preserves readers, animates and interrupts arrivals, honors
     for (const node of finalBatch) assert.equal(dom.window.document.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)!.inert, false);
     assert.equal(childReader.scrollTop, 173);
 
+    for (const height of [430, 290]) {
+      viewport = { width: 700, height };
+      ui.act(() => dom.window.dispatchEvent(new dom.window.Event("resize")));
+      update({ reducedMotion: true, transition: null, activeId: child.id, view: focusView(child.position, viewport.width, viewport.height) });
+      tick();
+      assert.equal(childCard.dataset.detail, "full", "a fitted topic opens its reader even in a short viewport");
+      assert.equal(childReader.scrollTop, 173);
+      update({ view: fitOverview(state.nodes, viewport.width, viewport.height) });
+      tick();
+      assert.notEqual(childCard.dataset.detail, "full", "zooming back out still collapses the reader");
+    }
+    viewport = { width: 1100, height: 780 };
+    ui.act(() => dom.window.dispatchEvent(new dom.window.Event("resize")));
     update({ reducedMotion: false, transition: null, view: start });
     tick();
     assert.ok(frames.size > 0);

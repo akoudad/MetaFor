@@ -69,16 +69,16 @@ test("returning to Chat after deleting Help clears its source and explains text-
 
 test("Help changes refresh an open source without closing it or losing the chosen annotation view", async () => {
   await openSource();
-  ui.fireEvent.change(ui.screen.getByLabelText("Annotations"), { target: { value: "" } });
+  ui.fireEvent.change(ui.screen.getByLabelText("Source and annotations"), { target: { value: "" } });
   saved!.source!.title = "Updated source title";
   ui.act(() => changed());
   await ui.screen.findByRole("heading", { name: "Updated source title" });
   assert.equal(visible, true);
-  assert.equal((ui.screen.getByLabelText("Annotations") as HTMLSelectElement).value, "");
+  assert.equal((ui.screen.getByLabelText("Source and annotations") as HTMLSelectElement).value, "");
   assert.equal(ui.screen.queryByRole("img", { name: "Annotations on the shared source" }), null);
 });
 
-test("wide sources preserve arrow direction and circular geometry and disclose crop reuse", async () => {
+test("wide sources preserve arrow direction and circular geometry and disclose captured context", async () => {
   await openSource();
   const svg = ui.screen.getByRole("img", { name: "Annotations on the shared source" });
   assert.equal(svg.getAttribute("viewBox"), "0 0 800 200");
@@ -91,10 +91,51 @@ test("wide sources preserve arrow direction and circular geometry and disclose c
   assert.equal(svg.querySelector("marker")?.getAttribute("markerWidth"), "20");
   assert.equal(Number(svg.querySelector("circle")?.getAttribute("cx")), 320);
   assert.equal(Number(svg.querySelector("circle")?.getAttribute("cy")), 100);
-  assert.ok(ui.screen.getByText("Follow-ups send this saved crop"));
-  assert.ok(ui.screen.getByText(/even with this panel closed/));
+  assert.ok(ui.screen.getByText("Saved screen context"));
+  assert.ok(ui.screen.getByText(/Chat does not read your current screen/));
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Close shared source" }));
-  assert.ok(ui.screen.getByText("Follow-ups send this saved crop"), "reuse remains disclosed with the panel closed");
+  assert.ok(ui.screen.getByText("Saved screen context"), "saved context remains disclosed with the panel closed");
+});
+
+test("the source picker includes unmarked exchanges and keeps historical marks on their matching image", async () => {
+  const oldSource = saved!.source!;
+  const currentSource = { ...oldSource, id: "current-source", title: "Current document", appName: "Notes", image: "data:image/png;base64,bmV3", width: 600, height: 900 };
+  saved!.source = currentSource;
+  saved!.sources = [oldSource];
+  saved!.messages[0].sourceId = oldSource.id;
+  saved!.messages.push({ id: "question-2", role: "user", text: "Explain the new document", createdAt: "2026-11-05T02:02:00.000Z", sourceId: currentSource.id });
+  await openSource();
+  const picker = ui.screen.getByLabelText("Source and annotations") as HTMLSelectElement;
+  assert.equal(picker.value, "question-2", "a source-only exchange is selectable without annotations");
+  assert.ok(ui.screen.getByRole("option", { name: /Explain the new document/ }));
+  assert.equal(ui.screen.getByAltText("Screen selection from Notes: Current document").getAttribute("src"), currentSource.image);
+  assert.equal(ui.screen.queryByRole("img", { name: "Annotations on the shared source" }), null, "historical marks are not painted on the new source");
+
+  ui.fireEvent.change(picker, { target: { value: "question-1" } });
+  assert.equal(ui.screen.getByAltText("Screen selection from Preview: Wide chart").getAttribute("src"), oldSource.image);
+  const svg = ui.screen.getByRole("img", { name: "Annotations on the shared source" });
+  assert.equal(svg.getAttribute("viewBox"), "0 0 800 200");
+  assert.equal(svg.querySelector("line")?.getAttribute("x1"), "640");
+  assert.equal(svg.querySelector("line")?.getAttribute("y1"), "180");
+
+  ui.fireEvent.change(picker, { target: { value: "" } });
+  assert.equal(ui.screen.getByAltText("Screen selection from Notes: Current document").getAttribute("src"), currentSource.image);
+  assert.equal(ui.screen.queryByRole("img", { name: "Annotations on the shared source" }), null);
+});
+
+test("a new captured view does not replace the historical source being inspected", async () => {
+  const oldSource = saved!.source!;
+  saved!.messages[0].sourceId = oldSource.id;
+  await openSource();
+  assert.equal((ui.screen.getByLabelText("Source and annotations") as HTMLSelectElement).value, "question-1");
+  saved!.sources = [oldSource];
+  saved!.source = { ...oldSource, id: "another-source", title: "Another screen", image: "data:image/png;base64,bmV3" };
+  saved!.messages.push({ id: "question-2", role: "user", text: "A later question", createdAt: "2026-11-05T02:02:00.000Z", sourceId: "another-source" });
+  ui.act(() => changed());
+  await ui.screen.findByRole("option", { name: /A later question/ });
+  assert.equal((ui.screen.getByLabelText("Source and annotations") as HTMLSelectElement).value, "question-1");
+  assert.equal(ui.screen.getByAltText("Screen selection from Preview: Wide chart").getAttribute("src"), oldSource.image);
+  assert.equal(ui.screen.getByRole("img", { name: "Annotations on the shared source" }).getAttribute("viewBox"), "0 0 800 200");
 });
 
 test("a delayed source lookup cannot attach a crop to a different imported conversation", async () => {
@@ -105,7 +146,7 @@ test("a delayed source lookup cannot attach a crop to a different imported conve
   rendered.rerender(<SharedSource bridge={bridge} conversationId="space-imported" revision={0} onVisibilityChange={visibility} />);
   await ui.act(async () => resolve(session()));
   assert.equal(ui.screen.queryByRole("button", { name: "Shared source" }), null);
-  assert.equal(ui.screen.queryByText("Follow-ups send this saved crop"), null);
+  assert.equal(ui.screen.queryByText("Saved screen context"), null);
   assert.deepEqual(calls, ["help-source"], "ordinary imports never look up a private Help source");
 });
 

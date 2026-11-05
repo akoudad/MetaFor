@@ -422,8 +422,10 @@ export default function SpatialWorld(props: SpatialWorldProps) {
         // topic being read. Other cards keep their depth ordering.
         element.style.zIndex = String(node.id === activeId ? camera.far + 1 : Math.max(1, Math.round(camera.far - distance)));
         element.style.setProperty("--node-scale", String(Math.max(0.1, scale)));
-        const mobileFullThreshold = Math.max(0.1, (width - 32) / CARD_WIDTH * 0.9);
-        const scaledDetail = fullDetailNodeIds.has(node.id) || scale >= mobileFullThreshold ? "full" : detailForScale(scale);
+        // A focused card also needs to open when the composer or sidebar leaves
+        // a short reading viewport. The fit camera uses 86% of its height.
+        const viewportFullThreshold = Math.max(0.1, Math.min((width - 32) / CARD_WIDTH * 0.9, height / CARD_HEIGHT * 0.8));
+        const scaledDetail = fullDetailNodeIds.has(node.id) || scale >= viewportFullThreshold ? "full" : detailForScale(scale);
         // Only the reader and explicitly paired sources expand during focus.
         const detail = compact && scaledDetail === "full" ? "summary" : activeId !== undefined && node.id !== activeId && !fullDetailNodeIds.has(node.id) && scaledDetail === "full" ? "summary" : scaledDetail;
         element.dataset.detail = detail;

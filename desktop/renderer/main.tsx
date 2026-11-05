@@ -3,8 +3,12 @@ import { createRoot } from "react-dom/client";
 import Chat from "./Chat";
 import Help from "./Help";
 import Selection from "./Selection";
+import Guidance from "./Guidance";
 import Settings from "./Settings";
 import "../shared";
+
+const surface = new URLSearchParams(location.search).get("surface");
+document.documentElement.dataset.desktopSurface = surface ?? "chat";
 
 class AppError extends Component<{ children: React.ReactNode }, { message: string }> {
   state = { message: "" };
@@ -13,11 +17,10 @@ class AppError extends Component<{ children: React.ReactNode }, { message: strin
 }
 
 function App() {
-  const surface = new URLSearchParams(location.search).get("surface");
   const [settings, setSettings] = useState(false);
   useEffect(() => window.metaforDesktop.onOpenSettings(() => setSettings(true)), []);
   useEffect(() => window.metaforDesktop.onSettingsChanged?.((value) => window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: value }))), []);
-  return <AppError>{surface === "selection" ? <Selection /> : surface === "help" ? <Help /> : <><Chat />{settings && <Settings onClose={() => setSettings(false)} />}</>}</AppError>;
+  return <AppError>{surface === "guidance" ? <Guidance /> : surface === "selection" ? <Selection /> : surface === "help" ? <Help /> : <><Chat />{settings && <Settings onClose={() => setSettings(false)} />}</>}</AppError>;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

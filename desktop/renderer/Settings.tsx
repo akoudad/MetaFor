@@ -21,7 +21,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   }, []);
   const save = async (event: FormEvent) => {
     event.preventDefault(); if (busy || !settings || settings.credentialLoading) return; setBusy(true); setError("");
-    try { const value = await window.metaforDesktop.saveSettings({ model, baseURL, shortcut, ...(key.trim() ? { apiKey: key } : {}) }); setSettings(value); setKey(""); window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: value })); if (!value.credentialLoading && !value.warnings?.preferences && !value.warnings?.credential) onClose(); }
+    try { const value = await window.metaforDesktop.saveSettings({ model, baseURL, shortcut, ...(key.trim() ? { apiKey: key } : {}) }); setSettings(value); setKey(""); window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: value })); if (value.shortcutRegistered !== false && !value.credentialLoading && !value.warnings?.preferences && !value.warnings?.credential) onClose(); }
     catch (e) { setError(e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : "Settings could not be saved."); }
     finally { setBusy(false); }
   };
@@ -36,8 +36,9 @@ export default function Settings({ onClose }: { onClose: () => void }) {
       <label>Model<input required value={model} onChange={(e) => setModel(e.target.value)} placeholder="muse-spark-1.3" /></label>
       <label>API base URL<input required value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.meta.ai/v1" /></label>
       <label>Help shortcut<input required value={shortcut} onChange={(e) => setShortcut(e.target.value)} /></label>
-      <p className="settings-note">Default: ⌃⌥⌘M. Global shortcut conflicts are reported; an app may still use the same shortcut locally. Choose another combination if needed.</p>
-      {settings && <p className="settings-note">Screen Recording: {settings.screenPermission}. macOS asks when you first choose a screen region. Each capture is a still image; only the crop you approve is sent.</p>}
+      {settings?.shortcutRegistered === false && <p role="alert" className="settings-error">Help shortcut {settings.shortcut} is unavailable. Choose another combination and save. You can still open Help from the File menu.</p>}
+      <p className="settings-note">Default: ⌥M (Option + M). Global shortcut conflicts are reported; an app may still use the same shortcut locally. Choose another combination if needed.</p>
+      {settings && <p className="settings-note">Screen Recording: {settings.screenPermission}. Help reads one screen snapshot when opened and refreshes it when you ask. Annotations use their original snapshot. Selecting an area is optional; nothing records continuously.</p>}
       <p className="settings-note">Bring web chats with File → Import Conversation. Export them as .ingx from your browser first.</p>
       {error && <p role="alert" className="settings-error">{error}</p>}
       <footer>{(settings?.hasSavedKey || settings?.configured || settings?.warnings?.credential) && <button type="button" disabled={busy} onClick={() => { setBusy(true); setError(""); window.metaforDesktop.removeKey().then((value) => { setSettings(value); window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: value })); }).catch((e) => setError(e.message)).finally(() => setBusy(false)); }}>Remove key</button>}<button type="submit" disabled={busy || !settings || settings.credentialLoading}>{busy ? "Saving…" : "Save settings"}</button></footer>
