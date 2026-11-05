@@ -216,6 +216,9 @@ avoid older autosaves overwriting a newer backup. Storage failures are reported,
 and old conversations are not silently evicted. Browser storage can still be
 cleared or unavailable; exported files provide a separate copy.
 
+The rename to metafor preserves the original browser storage identifiers and
+`.ingx` version, so existing conversations remain readable.
+
 ## Verification and release
 
 Automated checks cover model validation, routing, context, persistence, and UI

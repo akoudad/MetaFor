@@ -1,4 +1,4 @@
-# Metaphore
+# metafor
 
 Explore an AI conversation by topic without losing your place.
 

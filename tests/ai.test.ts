@@ -22,7 +22,7 @@ function completion(value: unknown = answer(), finishReason = "stop") {
 
 function successfulCompletion(init?: RequestInit) {
   const payload = JSON.parse(String(init?.body));
-  if (payload.response_format.json_schema.name === "metaphore_organization") {
+  if (payload.response_format.json_schema.name === "metafor_organization") {
     const written = answer();
     return completion({ reason: written.reason, overview: "", primary: { decision: written.decision, title: written.title, summary: written.summary, sectionIds: ["s0"], sourceIds: [] }, topics: [] });
   }
@@ -247,7 +247,7 @@ test("provider sends the documented structured request and returns only validate
     return successfulCompletion(init);
   };
   const result = await generateAnswer(input(), { env: testEnv, fetch: fetchMock });
-  assert.deepEqual(schemas, ["metaphore_answer", "metaphore_organization"]);
+  assert.deepEqual(schemas, ["metafor_answer", "metafor_organization"]);
   assert.equal(result.requestId, "request-one");
   assert.equal(result.sections[0].title, "Start with cash");
   assert.equal(result.model, "muse-spark-1.3");
@@ -439,7 +439,7 @@ test("the shared timeout also aborts an organizer stalled after a successful wri
   const fetchMock: typeof fetch = async (_url, init) => {
     const name = JSON.parse(String(init?.body)).response_format.json_schema.name;
     schemas.push(name);
-    if (name === "metaphore_answer") return completion();
+    if (name === "metafor_answer") return completion();
     return new Promise((_resolve, reject) => {
       const abort = () => { organizerAborted = true; reject(new DOMException("Aborted", "AbortError")); };
       if (init?.signal?.aborted) abort();
@@ -447,7 +447,7 @@ test("the shared timeout also aborts an organizer stalled after a successful wri
     });
   };
   await assert.rejects(generateAnswer(input(), { env: testEnv, fetch: fetchMock, timeoutMs: 20 }), (error: unknown) => error instanceof AnswerError && error.code === "model_timeout");
-  assert.deepEqual(schemas, ["metaphore_answer", "metaphore_organization"]);
+  assert.deepEqual(schemas, ["metafor_answer", "metafor_organization"]);
   assert.equal(organizerAborted, true);
 });
 
@@ -462,9 +462,9 @@ test("organizer failure returns a recoverable error without changing the capture
     await assert.rejects(generateAnswer(request, { env: testEnv, fetch: async (_url, init) => {
       const name = JSON.parse(String(init?.body)).response_format.json_schema.name;
       schemas.push(name);
-      return name === "metaphore_answer" ? completion() : failure.response();
+      return name === "metafor_answer" ? completion() : failure.response();
     } }), (error: unknown) => error instanceof AnswerError && error.code === failure.code && error.retryable && !error.message.includes("private organizer diagnostics"));
-    assert.deepEqual(schemas, ["metaphore_answer", "metaphore_organization"]);
+    assert.deepEqual(schemas, ["metafor_answer", "metafor_organization"]);
     assert.equal(JSON.stringify(request), original);
   }
 });
@@ -482,7 +482,7 @@ test("cancellation at the end of the writer response prevents the organizer call
     schemas.push(JSON.parse(String(init?.body)).response_format.json_schema.name);
     return new Response(body);
   } }, controller.signal), (error: unknown) => error instanceof AnswerError && error.code === "cancelled");
-  assert.deepEqual(schemas, ["metaphore_answer"]);
+  assert.deepEqual(schemas, ["metafor_answer"]);
 });
 
 test("user cancellation aborts an organizer already running after the writer", async () => {
@@ -492,7 +492,7 @@ test("user cancellation aborts an organizer already running after the writer", a
   let organizerAborted = false;
   const pending = generateAnswer(input(), { env: testEnv, fetch: async (_url, init) => {
     const name = JSON.parse(String(init?.body)).response_format.json_schema.name;
-    if (name === "metaphore_answer") return completion();
+    if (name === "metafor_answer") return completion();
     organizerStarted();
     return new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => { organizerAborted = true; reject(new DOMException("Aborted", "AbortError")); }, { once: true });
@@ -596,7 +596,7 @@ test("two-call annotation generation carries immutable ownership through both st
     const name = payload.response_format.json_schema.name;
     calls.push(name);
     const data = JSON.parse(payload.messages[1].content);
-    if (name === "metaphore_answer") {
+    if (name === "metafor_answer") {
       assert.deepEqual(data.context.annotations.map((item: { id: string }) => item.id), ["companies-note", "equity-note"]);
       assert.ok(payload.response_format.json_schema.schema.properties.topics.items.required.includes("annotationId"));
       return completion(written);
@@ -605,7 +605,7 @@ test("two-call annotation generation carries immutable ownership through both st
     assert.equal(data.annotations[0].text, request.annotations![0].source.quote);
     return completion({ reason: "Each question keeps its selected passage.", overview: "", primary: { decision: "continue", title: written.title, summary: written.summary, sectionIds: ["s0"], sourceIds: [] }, topics: written.topics.map(({ sections: _sections, ...topic }, index) => ({ ...topic, sectionIds: [`s${index + 1}`] })) });
   } });
-  assert.deepEqual(calls, ["metaphore_answer", "metaphore_organization"]);
+  assert.deepEqual(calls, ["metafor_answer", "metafor_organization"]);
   assert.deepEqual(result.topics!.map((topic) => topic.annotationId), ["companies-note", "equity-note"]);
   assert.deepEqual(result.topics!.flatMap((topic) => topic.sections), written.topics.flatMap((topic) => topic.sections));
 });

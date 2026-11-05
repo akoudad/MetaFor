@@ -11,7 +11,7 @@ import { parseSnapshot, serializeSnapshot } from "../src/lib/storage";
 // Historical text below is a reproduction fixture, not verified current information.
 async function main() {
   const origin = new URL(process.argv[2] ?? "http://127.0.0.1:3000").origin;
-  const output = await mkdtemp(join(tmpdir(), "metaphore-annotations-"));
+  const output = await mkdtemp(join(tmpdir(), "metafor-annotations-"));
   console.log(`Artifacts: ${output}`);
   const fixture = (title: string, body: string) => {
     const conversation = createConversation();

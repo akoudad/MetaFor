@@ -20,7 +20,7 @@ async function main() {
   if (!status.configured) throw new Error("The app has no configured model provider.");
   if (status.accessCodeRequired) throw new Error("This smoke script requires a local app without a demo access gate.");
 
-  const output = await mkdtemp(join(tmpdir(), "metaphore-live-smoke-"));
+  const output = await mkdtemp(join(tmpdir(), "metafor-live-smoke-"));
   let conversation = createConversation();
   const rootId = conversation.rootId;
   const steps: { label: string; milliseconds: number; request: AnswerRequest; answer: AnswerResult; destinationId: string }[] = [];

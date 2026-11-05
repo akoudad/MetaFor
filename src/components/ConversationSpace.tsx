@@ -890,7 +890,7 @@ export default function ConversationSpace() {
 
   return <main className={`space ${annotations.length ? "has-annotations" : ""}`} aria-busy={switching}>
     <header className="topbar">
-      <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metaphore</button>
+      <button className="wordmark" onClick={() => started ? showOverview() : composer.current?.focus()}>metafor</button>
       <div className="top-actions">
         <button onClick={() => void openFresh()} disabled={!ready || switching || Boolean(pending && !pending.error)}>New chat</button>
         <button onClick={() => { setSavedChats(!savedChats); setMenu(false); }} disabled={!ready || switching} aria-expanded={savedChats}>Saved chats</button>

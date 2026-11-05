@@ -35,6 +35,7 @@ export type Snapshot = {
 export type SavedSpace = { id: string; title: string; savedAt: string };
 
 export const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+// Keep the original storage identifiers so the rebrand preserves saved chats.
 const DATABASE = "metaphore-spaces";
 const SNAPSHOTS = "snapshots";
 const LIBRARY = "library";
@@ -190,7 +191,7 @@ function openDatabase(): Promise<IDBDatabase> {
     let done = false;
     const timeout = setTimeout(() => {
       done = true;
-      reject(new Error("Local storage did not respond. Close another Metaphore tab and retry."));
+      reject(new Error("Local storage did not respond. Close another metafor tab and retry."));
     }, 4000);
     let request: IDBOpenDBRequest;
     try { request = indexedDB.open(DATABASE, 1); }

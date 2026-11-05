@@ -11,7 +11,7 @@ import { parseSnapshot, serializeSnapshot } from "../src/lib/storage";
 // are read or printed; this uses the already configured local server.
 async function main() {
   const origin = new URL(process.argv[2] ?? "http://127.0.0.1:3000").origin;
-  const output = process.argv[3] ?? await mkdtemp(join(tmpdir(), "metaphore-graph-smoke-"));
+  const output = process.argv[3] ?? await mkdtemp(join(tmpdir(), "metafor-graph-smoke-"));
   console.log(`Artifacts: ${output}`);
   let conversation = createConversation();
   const steps: { label: string; milliseconds: number; answer: AnswerResult; topicIds: string[]; destinationId: string }[] = [];

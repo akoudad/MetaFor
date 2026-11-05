@@ -111,9 +111,9 @@ export async function generateAnswer(request: AnswerRequest, options: ProviderOp
       try { answer = JSON.parse(choice.message.content); } catch { throw invalid; }
       return answer;
     };
-    const rawAnswer = await complete(answerMessages(request, context), ANSWER_SCHEMA, "metaphore_answer", 6000);
+    const rawAnswer = await complete(answerMessages(request, context), ANSWER_SCHEMA, "metafor_answer", 6000);
     const answer = validateAnswerOutput(rawAnswer, request, context.record, config.model);
-    const plan = await complete(organizerMessages(request, answer), ORGANIZER_SCHEMA, "metaphore_organization", 3000);
+    const plan = await complete(organizerMessages(request, answer), ORGANIZER_SCHEMA, "metafor_organization", 3000);
     return organizeAnswer(plan, request, answer);
   } catch (error) {
     if (timedOut) throw new AnswerError("model_timeout", "The model took too long. Your question is kept; please retry.", 504, true);
@@ -134,7 +134,7 @@ function sameSecret(expected: string, supplied: string | null) {
 }
 
 function checkOrigin(request: Request) {
-  const invalid = () => new AnswerError("invalid_origin", "Open this request from the Metaphore app.", 403);
+  const invalid = () => new AnswerError("invalid_origin", "Open this request from the metafor app.", 403);
   try {
     const requestURL = new URL(request.url);
     const forwarded = request.headers.get("x-forwarded-proto")?.trim().toLowerCase();
@@ -172,7 +172,7 @@ async function readRequest(request: Request, timeoutMs: number) {
 
 function responseError(error: unknown) {
   const safe = error instanceof AnswerError ? error : new AnswerError("internal_error", "The answer could not be completed. Your question is kept; please retry.", 500, true);
-  if (safe.status >= 500) console.warn("[Metaphore] answer request failed:", safe.code);
+  if (safe.status >= 500) console.warn("[metafor] answer request failed:", safe.code);
   return Response.json({ error: safe.message, code: safe.code, retryable: safe.retryable }, {
     status: safe.status,
     headers: { "Cache-Control": "no-store", ...(safe.status === 429 ? { "Retry-After": "10" } : {}) },

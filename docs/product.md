@@ -2,7 +2,7 @@
 
 Working design · 2026-11-05
 
-Metaphore lets you explore an idea within an AI answer and return without losing
+metafor lets you explore an idea within an AI answer and return without losing
 your place. Depth represents detail. Relationships come from sources and explicit
 connections, independently of where topics appear on screen.
 
