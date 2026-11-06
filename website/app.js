@@ -11,6 +11,12 @@
     traveler: $(`${name}-traveler`),
     samples: []
   }));
+  const journeyPoints = [...document.querySelectorAll('[data-journey-point]')].map((node) => ({ node, y: 0 }));
+  const reveals = [...document.querySelectorAll('.feature-heading, .feature-detail, .film-section')].map((element) => ({
+    element,
+    marker: element.querySelector('[data-journey-point], #journey-end'),
+    y: 0
+  }));
   let frame = 0;
   let measurePending = true;
   let mainTop = 0;
@@ -76,6 +82,8 @@
     branch('chat', chatPoints);
     branch('help', helpPoints);
     setRoute('end', `M ${mid} ${mergeY} L ${end.x} ${end.y}`);
+    journeyPoints.forEach((point) => { point.y = center(point.node).y; });
+    reveals.forEach((item) => { item.y = center(item.marker).y; });
     measurePending = false;
   }
   function lengthAtY(route, y) {
@@ -108,9 +116,20 @@
       const active = route.name === 'stem' ? activeY < splitY : route.name === 'end' ? activeY >= mergeY : activeY >= splitY && activeY < mergeY;
       route.traveler.style.opacity = active && progressY > originY && progressY < endY ? '1' : '0';
     });
-    document.querySelectorAll('[data-journey-point]').forEach((node) => {
-      node.classList.toggle('is-reached', reducedMotion.matches || center(node).y <= activeY);
+    journeyPoints.forEach((point) => {
+      point.node.classList.toggle('is-reached', reducedMotion.matches || point.y <= activeY);
     });
+    // Opacity preserves marker geometry and accordion state while scrolling both ways.
+    // Use unclamped progress so the demo can appear after the paths reunite.
+    const target = main.querySelector('.feature-section:target, .feature-grid:target, .film-section:target');
+    const targetHeading = target && (target.matches('.film-section') ? target : target.querySelector('.feature-heading'));
+    const atTarget = target && target.getBoundingClientRect().top <= parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) + 1;
+    reveals.forEach((item) => {
+      const reveal = reducedMotion.matches || (atTarget && item.element === targetHeading) ? 1 : clamp((progressY - item.y) / 64, 0, 1);
+      item.element.style.setProperty('--journey-reveal', String(reveal));
+      item.element.classList.toggle('is-unrevealed', reveal === 0);
+    });
+    main.classList.add('journey-ready');
     const showDownload = $('hero-download').getBoundingClientRect().bottom < 0;
     $('floating-download').classList.toggle('is-visible', showDownload);
     $('floating-download').setAttribute('aria-hidden', String(!showDownload));
@@ -130,6 +149,7 @@
   }
   window.addEventListener('scroll', () => schedule(), { passive: true });
   window.addEventListener('resize', () => schedule(true));
+  window.addEventListener('hashchange', () => schedule());
   reducedMotion.addEventListener('change', () => schedule());
   document.querySelectorAll('.feature-detail').forEach((detail) => detail.addEventListener('toggle', () => schedule(true)));
   if ('ResizeObserver' in window) new ResizeObserver(() => schedule(true)).observe(main);

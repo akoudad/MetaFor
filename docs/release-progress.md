@@ -72,5 +72,12 @@ never deployed. Previous site versions and release `v0.4.9` remain for rollback.
   Cloudflare `_redirects` sends `/download` and `/download/` directly to the
   current GitHub-hosted installer with HTTP 302; no GitHub page is opened.
   An actual short-link download matched the release checksum above.
-- Progressive creation of branches and sections is awaiting the user's visual
-  behavior confirmation. The existing scroll animation has not been changed.
+- The user confirmed progressive creation: future path outlines are hidden,
+  headings and detail rows appear as the orb reaches them, and the demo appears
+  after the branches reunite. Scrolling up reverses the reveal while preserving
+  expanded details. Reduced motion, keyboard focus, section links, and no-JS
+  reading remain available.
+  Nine viewport layout/path checks passed. Focused desktop/mobile/short-window
+  checks covered hidden, partial, full, and reverse states, stable geometry,
+  expanded details, keyboard focus, anchor arrival/reversal, reduced motion,
+  and no-JS reading. Report: `artifacts/scroll-reveal-qa/results.json`.
