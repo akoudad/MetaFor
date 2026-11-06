@@ -115,6 +115,14 @@
     $('floating-download').classList.toggle('is-visible', showDownload);
     $('floating-download').setAttribute('aria-hidden', String(!showDownload));
     $('floating-download').tabIndex = showDownload ? 0 : -1;
+    const download = $('floating-download');
+    const downloadRect = download.getBoundingClientRect();
+    const videoRect = document.querySelector('.video-frame').getBoundingClientRect();
+    const bottom = window.innerWidth <= 700 ? 18 : 27;
+    const buttonTop = window.innerHeight - bottom - downloadRect.height;
+    const overlapsVideo = downloadRect.left < videoRect.right && downloadRect.right > videoRect.left && buttonTop < videoRect.bottom && buttonTop + downloadRect.height + 12 > videoRect.top;
+    const lift = overlapsVideo ? Math.max(0, window.innerHeight - bottom - videoRect.top + 12) : 0;
+    download.style.bottom = `${bottom + Math.min(lift, window.innerHeight - bottom - downloadRect.height - 8)}px`;
   }
   function schedule(measureAgain = false) {
     measurePending = measurePending || measureAgain;

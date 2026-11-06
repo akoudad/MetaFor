@@ -29,11 +29,16 @@ permission.
 
 ## Get started
 
-[Website](https://getmetafor.akoudad-karim-contac.chatgpt.site) ·
-[Download for Mac — Apple silicon](https://github.com/akoudad/MetaFor/releases/download/v0.4.9/Metafor-0.4.9-arm64.dmg)
+[Website](https://metafor.pages.dev) ·
+[Watch demo](https://youtu.be/hBM_tifGJJk) ·
+[Download for Mac — Apple silicon](https://github.com/akoudad/MetaFor/releases/download/v0.4.10/Metafor-0.4.10-arm64.dmg)
 
-The Mac app requires an internet connection and **your own model API key**.
-Add the key in Settings. See the
+The Mac app requires **Apple silicon, macOS 26+**, an internet connection, and
+**your own model API key**. Move the app from the DMG into Applications, then
+choose **Add API key** in the welcome guide or open **Settings** (`⌘,`).
+Save your key, then use **Check connection** for the default Meta provider.
+Saved chats remain readable without a key; reinstalling preserves your local data.
+This preview is ad-hoc signed, not Developer ID signed or notarized. See the
 [Mac app guide](https://github.com/akoudad/MetaFor/blob/feat/macos-app/docs/mac-app.md)
 for installation, permissions, and source builds.
 
@@ -56,4 +61,4 @@ npm run build
 ```
 
 [Architecture](docs/architecture.md) · [Demo](docs/demo.md) ·
-[Deployment](docs/deployment.md)
+[Deployment](docs/deployment.md) · [Release progress](docs/release-progress.md)

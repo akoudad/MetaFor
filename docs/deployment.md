@@ -1,8 +1,12 @@
 # Deployment
 
-The local production build has been checked in native Safari; public deployment
-remains unverified. These are setup instructions, and publication remains a separate
-step. The app needs a Node.js server because live AI uses `/api/answer`.
+The public [MetaFor website](https://metafor.pages.dev)
+is the static showcase in [`website/`](../website/README.md); it links to the
+packaged Mac app. It does not run the web prototype or receive API keys.
+
+The instructions below concern the separate Next.js web prototype. Its public
+deployment remains unverified. It needs a Node.js server because live AI uses
+`/api/answer`.
 
 ## Configuration
 
