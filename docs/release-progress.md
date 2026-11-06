@@ -88,3 +88,8 @@ never deployed. Previous site versions and release `v0.4.9` remain for rollback.
   Desktop, phone, and landscape checks passed for cue visibility, mouse/keyboard
   navigation, current-section updates, reduced motion, and collision-free video
   controls. Report: `artifacts/cue-qa/final-summary.json`.
+- The primary website's browser-tab title is exactly `MetaFor`.
+- Both branch READMEs and the Mac installation guide now lead with concise
+  usage and setup. Main documentation has a small index and focused pages;
+  detailed native behavior remains in an optional reference. Markdown links,
+  formatting, and documented npm scripts were checked before pushing.

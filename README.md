@@ -4,62 +4,34 @@
 [Watch demo](https://youtu.be/hBM_tifGJJk) ·
 [Download for Mac](https://metafor.pages.dev/download)
 
+Explore AI conversations as connected topics, or get help with the app you're using.
 
-## Architecture
+## Chat and Help
 
-MetaFor uses a shared React and TypeScript conversation engine:
+**Chat:** ask about a passage, follow connected topics, and return without losing
+your reading position. Conversations save locally and can be exported as `.ingx` files.
 
-- **Mac app:** Electron with native macOS helpers, on [`feat/macos-app`](https://github.com/akoudad/MetaFor/tree/feat/macos-app).
-- **Web prototype:** Next.js, with server-side model requests, on `main`.
-- **Website:** a standalone HTML, CSS, and JavaScript showcase in [`website/`](website/).
-
-Chat stores topics, source references, and connections as a graph. A writer
-produces the answer; an organizer assigns its sections to topics. The interface
-preserves the original text and validates connections before applying changes.
-Conversations save locally and can be exported as `.ingx` files.
-
-## MetaFor Chat
-
-Explore an answer as connected topics. Select a passage to ask a focused
-question, follow its branch, and return to your reading position. The
-conversation map keeps the larger structure accessible.
-
-## MetaFor Help
-
-Press **⌥M (Option + M)** to open a compact overlay above your current app.
-Ask about the screen and receive an answer, translation, or visual pointer in
-place. Continue the exchange in Chat when you want to explore further.
-Help sends screen snapshots with your questions and requires Screen Recording
-permission.
+**Help:** press **Option + M** for a small overlay with explanations, translations,
+or visual pointers. Help sends a screen snapshot with your question and requires
+Screen Recording permission.
 
 ## Get started
 
-The Mac app requires **Apple silicon, macOS 26+**, an internet connection, and
-**your own model API key**. Move the app from the DMG into Applications, then
-choose **Add API key** in the welcome guide or open **Settings** (`⌘,`).
-Save your key, then use **Check connection** for the default Meta provider.
-Saved chats remain readable without a key; reinstalling preserves your local data.
-This preview is ad-hoc signed, not Developer ID signed or notarized. See the
-[Mac app guide](https://github.com/akoudad/MetaFor/blob/feat/macos-app/docs/mac-app.md)
-for installation, permissions, and source builds.
+Requires **Apple silicon, macOS 26+, internet access, and your own model API key**.
+
+1. [Download MetaFor](https://metafor.pages.dev/download) and move it to Applications.
+2. Choose **Add API key**, or open **Settings** (`⌘,`). Save your key and use
+   **Check connection** for the default Meta provider.
+3. Start a Chat, or press **Option + M** to open Help.
+
+This preview is ad-hoc signed and not notarized. Saved chats remain readable
+without a key; reinstalling preserves your local data.
+[Installation help](https://github.com/akoudad/MetaFor/blob/feat/macos-app/docs/mac-app.md).
 
 ## Development
 
-For the web prototype, use Node.js 22 and a Meta Model API key:
+This branch contains the Next.js prototype and static website. The desktop app
+lives on [`feat/macos-app`](https://github.com/akoudad/MetaFor/tree/feat/macos-app).
 
-```sh
-npm ci
-cp -n .env.example .env.local
-```
-
-Set `MODEL_API_KEY` in `.env.local`, run `npm run dev`, and open
-[127.0.0.1:3000](http://127.0.0.1:3000). Credentials stay on the server.
-
-```sh
-npm test
-npm run typecheck
-npm run build
-```
-
-[Architecture](docs/architecture.md) · [Demo](docs/demo.md) ·
-[Deployment](docs/deployment.md) · [Release progress](docs/release-progress.md)
+[Develop locally](docs/development.md) · [Architecture](docs/architecture.md) ·
+[Documentation](docs/README.md)
