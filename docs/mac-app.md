@@ -18,12 +18,19 @@ This desktop work lives in the separate `metafor-mac` worktree on
    shortcut. Choose **Add API key** and enter your own API key. Settings remains
    available from **Metafor → Settings…** (`⌘,`).
 3. The default provider is Meta, with model `muse-spark-1.3` and API base
-   `https://api.meta.ai/v1`. Save settings, then ask a question in Chat.
+   `https://api.meta.ai/v1`. Save settings, then choose **Check connection** to
+   verify API access and selected-model availability. Choose **Done** to use Chat.
    The chooser below the prompt switches the model and reasoning level for both
    Chat and Help. **Balanced** is the default; see [model choices](model-selection.md).
 
-Without a saved API key, setup stays open until a key is saved. Empty keys are
-rejected, and relaunching after the guide still opens setup. Accounts with a
+Without a saved API key, setup opens prominently. Empty keys are rejected.
+**Browse saved chats** (or close Settings) keeps existing content accessible and
+leaves an **Add API key** reminder; AI requests still require a key. Relaunching
+without a key reopens setup. Saving confirms local storage, not provider access.
+**Check connection** verifies the saved Meta key through the model-list endpoint
+and reports rejected credentials or unavailable models. Custom providers are
+checked when you ask a question. No connection check sends conversation content.
+Accounts with a
 saved key can choose **Get started**; **Metafor → Quick start…** opens the guide
 again. Guide completion is stored
 in `onboarding.json` in the app's user-data directory, separately from settings,

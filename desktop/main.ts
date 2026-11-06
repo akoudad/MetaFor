@@ -696,7 +696,7 @@ function installIPC() {
       return { status: 200, body };
     } catch (error) {
       const safe = error instanceof AnswerError ? error : new AnswerError("desktop_error", "The answer could not finish. Your question is kept.", 500, true);
-      return { status: safe.status, body: { error: safe.message, code: safe.code, retryable: safe.retryable } };
+      return { status: safe.status, body: { error: safe.code === "provider_credentials" ? "The API key was rejected. Check Settings." : safe.code === "not_configured" ? "Add your API key in Settings before asking." : safe.message, code: safe.code, retryable: safe.retryable } };
     } finally { if (id && ownedController && requests.get(id) === ownedController) requests.delete(id); }
   });
   ipcMain.handle("metafor:ready", (event) => {

@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises');
+const { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { _electron } = require('@playwright/test');
@@ -7,7 +7,8 @@ const asar = require('@electron/asar');
 
 (async () => {
   const root = process.cwd();
-  const bundle = path.join(root, 'artifacts/mac/mac-arm64/Metafor.app/Contents/Resources/app.asar');
+  const bundle = path.resolve(process.argv[2] || path.join(root, 'artifacts/mac/mac-arm64/Metafor.app/Contents/Resources/app.asar'));
+  const executable = process.argv[3] || path.resolve(bundle, '../../MacOS/Metafor');
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'metafor-native-profile-'));
   const wrapper = path.join(scratch, 'hidden.cjs');
   // Real packaged main/preload/renderer and Chromium storage; only native
@@ -18,7 +19,19 @@ const Module = require('node:module');
 const electron = require('electron');
 const load = Module._load;
 global.__profileRequests = 0;
-global.fetch = async () => { global.__profileRequests++; throw new Error('Unexpected provider request in profile check.'); };
+global.__profileMode = 'blocked';
+global.fetch = async (url, init) => {
+  global.__profileRequests++;
+  if (global.__profileMode === 'blocked') throw new Error('Unexpected provider request in profile check.');
+  if (global.__profileMode === 'rejected') return new Response('Fixture rejection', { status: 401 });
+  if (String(url) === 'https://api.meta.ai/v1/models') return Response.json({ data: [{ id: 'muse-spark-1.3' }] });
+  if (String(url) !== 'https://api.meta.ai/v1/chat/completions') throw new Error('Unexpected fixture URL.');
+  const schema = JSON.parse(init.body).response_format.json_schema.name;
+  const answer = schema === 'metafor_organization'
+    ? { reason: 'One answer.', overview: '', primary: { decision: 'continue', title: 'Explanation', summary: 'A short explanation.', sectionIds: ['s0'], sourceIds: [] }, topics: [] }
+    : { decision: 'continue', reason: 'One answer.', title: 'Explanation', summary: 'A short explanation.', sections: [{ title: 'Explanation', body: 'A short explanation.' }], related: [] };
+  return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(answer) } }] });
+};
 class HiddenWindow extends electron.BrowserWindow {
   constructor(options) { super({ ...options, show: false }); }
   show() {} showInactive() {} focus() {}
@@ -35,12 +48,25 @@ Module._load = function(id, ...args) { return id === 'electron' ? silent : load.
 electron.app.whenReady().then(() => electron.app.dock?.hide());
 require(${JSON.stringify(path.join(bundle, 'main.cjs'))});
 `);
+  // Packaged Electron ignores command-line app entrypoints. Use its unchanged
+  // executable/frameworks in a temporary app copy with a test-only bootstrap;
+  // the bootstrap above loads the original production ASAR without editing it.
+  const runtime = path.join(scratch, 'Metafor.app');
+  await cp(path.resolve(executable, '../../..'), runtime, { recursive: true, verbatimSymlinks: true, mode: require('node:fs').constants.COPYFILE_FICLONE });
+  assert.deepEqual(await readFile(path.join(runtime, 'Contents/MacOS', path.basename(executable))), await readFile(executable));
+  const runtimeBundle = path.join(runtime, 'Contents/Resources/app.asar');
+  await rename(runtimeBundle, `${runtimeBundle}.original`);
+  const bootstrap = path.join(scratch, 'bootstrap');
+  await mkdir(bootstrap);
+  await writeFile(path.join(bootstrap, 'package.json'), JSON.stringify({ name: 'metafor-profile-check', version: '1.0.0', main: 'main.cjs' }));
+  await writeFile(path.join(bootstrap, 'main.cjs'), `require(${JSON.stringify(wrapper)});`);
+  await asar.createPackage(bootstrap, runtimeBundle);
   let app;
   const report = { packagedVersion: JSON.parse(asar.extractFile(bundle, 'package.json')).version, bundleEntries: asar.listPackage(bundle), fresh: [], persistence: null };
   const launch = async (name, configured = false) => {
     const env = { ...process.env, METAFOR_USER_DATA: path.join(scratch, name), METAFOR_IMPORT_MODEL: '' };
     delete env.ELECTRON_RUN_AS_NODE;
-    app = await _electron.launch({ executablePath: require('electron'), args: [wrapper], cwd: root, env });
+    app = await _electron.launch({ executablePath: path.join(runtime, 'Contents/MacOS', path.basename(executable)), args: [], cwd: root, env });
     const page = await app.firstWindow();
     await page.waitForFunction(() => { const input = document.querySelector('textarea[aria-label="Your question"]'); return input && !input.disabled; });
     await page.waitForFunction(async () => !(await window.metaforDesktop.getSettings()).credentialLoading);
@@ -74,7 +100,7 @@ require(${JSON.stringify(path.join(bundle, 'main.cjs'))});
     report.fresh.push({ profile: 'a', ...first });
     await page.getByRole('button', { name: 'Add API key' }).click();
     await page.getByRole('heading', { name: 'Connect Metafor' }).waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Close settings' }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Close settings' }).count(), 1);
     assert.equal(await page.getByLabel('API key', { exact: true }).getAttribute('required'), '');
     await page.getByRole('button', { name: 'Save settings' }).click();
     assert.equal(await page.evaluate(() => document.querySelector('input[type=password]').validity.valueMissing), true);
@@ -90,25 +116,55 @@ require(${JSON.stringify(path.join(bundle, 'main.cjs'))});
     await page.getByRole('heading', { name: 'Connect Metafor' }).waitFor();
     await page.getByLabel('API key', { exact: true }).fill('synthetic-profile-test-key');
     await page.getByRole('button', { name: 'Save settings' }).click();
+    await page.getByText('Settings saved on this Mac. Provider access has not been checked.').waitFor();
+    await app.evaluate(() => { global.__profileMode = 'rejected'; });
+    await page.getByRole('button', { name: 'Check connection', exact: true }).click();
+    await page.getByText('The API key could not list models. Check it in Settings.').waitFor();
+    await app.evaluate(() => { global.__profileMode = 'accepted'; });
+    await page.getByRole('button', { name: 'Check connection', exact: true }).click();
+    await page.getByText('Connection verified: API key accepted and selected model available.').waitFor();
+    await page.screenshot({ path: path.join(root, 'artifacts/qa/first-run-connection-checked.png') });
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     assert.equal((await page.evaluate(() => window.metaforDesktop.getSettings())).configured, true);
-    report.setup = { required: true, blankKeyRejected: true, keylessRelaunchRequiresSetup: true, connected: true };
+    report.setup = { requiredForAI: true, blankKeyRejected: true, keylessRelaunchShowsSetup: true, savedKeyReported: true, rejectedKeyReported: true, verifiedFixtureAccessReported: true };
+    await page.getByRole('textbox', { name: 'Your question' }).fill('Profile fixture question');
+    await page.getByRole('button', { name: 'Send question', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[data-message-id]') && !document.querySelector('.pending-answer'));
+    await page.waitForFunction(() => document.querySelector('.save-status')?.textContent === 'Saved locally');
+    const created = await inspect(page);
+    assert.equal(created.snapshots.length, 1);
+    assert.equal(created.snapshots[0].conversation.explorations.root.messages.length, 2);
+    report.stubbedProviderRequests = await app.evaluate(() => global.__profileRequests);
     await page.getByLabel('Import conversation file').setInputFiles(path.join(root, 'examples/browser-cache.ingx'));
     await page.waitForFunction(() => document.querySelectorAll('[data-topic]').length > 0);
     const draft = 'Native profile persistence check — unsent draft';
     await page.getByRole('textbox', { name: 'Your question' }).fill(draft);
     await page.waitForFunction(() => document.querySelector('.save-status')?.textContent === 'Saved locally');
     const before = await inspect(page);
-    assert.equal(before.snapshots.length, 1); assert.equal(before.draft, draft);
-    assert.equal(before.snapshots[0].conversation.title, 'HTTP Caching: Freshness and Revalidation');
-    assert.equal(Object.keys(before.snapshots[0].conversation.explorations).length, 2);
-    assert.equal(await app.evaluate(() => global.__profileRequests), 0);
+    assert.equal(before.snapshots.length, 2); assert.equal(before.draft, draft);
+    assert.ok(before.snapshots.some(value => value.conversation.title === 'HTTP Caching: Freshness and Revalidation'));
+    assert.ok(before.snapshots.some(value => Object.keys(value.conversation.explorations).length === 2));
     await app.close(); app = null;
     page = await launch('profile-a', true);
     const after = await inspect(page);
     assert.equal(after.welcome, false); assert.equal(after.draft, draft);
     assert.deepEqual(after.snapshots.map(x => x.conversation), before.snapshots.map(x => x.conversation));
-    report.persistence = { savedChats: after.snapshots.length, topics: after.topics, unchangedConversation: true, draftRestored: true };
+    await page.evaluate(() => window.metaforDesktop.openSettings());
+    await page.getByRole('button', { name: 'Remove key', exact: true }).click();
+    await page.getByRole('button', { name: 'Browse saved chats', exact: true }).click();
+    await page.getByLabel('API key setup').waitFor();
+    assert.deepEqual((await inspect(page)).snapshots.map(x => x.conversation), before.snapshots.map(x => x.conversation));
+    await page.screenshot({ path: path.join(root, 'artifacts/qa/first-run-browse-without-key.png') });
+    report.setup.savedChatsAccessibleWithoutKey = true;
+    report.persistence = { savedChats: after.snapshots.length, topics: after.topics, unchangedConversations: true, newlyCreatedChatRestored: true, importedChatRestored: true, draftRestored: true };
+    assert.equal(await app.evaluate(() => global.__profileRequests), 0);
+    await app.close(); app = null;
+    page = await launch('profile-a');
+    await page.getByRole('button', { name: 'Browse saved chats', exact: true }).click();
+    await page.getByLabel('API key setup').waitFor();
+    assert.deepEqual((await inspect(page)).snapshots.map(x => x.conversation), before.snapshots.map(x => x.conversation));
+    report.persistence.keylessRelaunchKeptSavedChats = true;
     assert.equal(await app.evaluate(() => global.__profileRequests), 0);
     await app.close(); app = null;
     page = await launch('profile-b');
@@ -120,7 +176,11 @@ require(${JSON.stringify(path.join(bundle, 'main.cjs'))});
     assert.deepEqual(report.bundleEntries.filter(name => /indexeddb|local storage|preferences\.json|credential\.enc|\.ingx$/i.test(name)), []);
     report.nativePresentationSuppressed = true;
     report.keychainMocked = true;
-    report.providerRequests = 0;
+    report.externalProviderRequests = 0;
+    report.packagedExecutable = true;
+    report.testBootstrapInTemporaryAppCopy = true;
+    report.productionAsarUnmodified = true;
+    report.providerResponsesMocked = true;
     report.completedAt = new Date().toISOString();
     await writeFile(path.join(root, 'artifacts/qa/first-run-profile-result.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));

@@ -2,7 +2,43 @@
 
 Desktop worktree: `metafor-mac`, branch `feat/macos-app`.
 
-## Current build: 0.4.9 — required API-key setup
+## Current build: 0.4.10 — setup without locking saved chats
+
+The first-open guide still leads to **Add API key**. **Browse saved chats**
+closes setup without enabling AI and keeps an **Add API key** reminder visible.
+Saving settings reports local storage separately from provider access.
+**Check connection** uses Meta's model-list endpoint and reports accepted keys,
+unavailable models, or rejected credentials. Custom providers are checked when
+asking a question. Chat credential errors now point to Settings.
+
+All 219 desktop tests, 248 web conversation tests, TypeScript, Next.js production
+build, and the Apple silicon DMG build pass. Tests include normalized settings,
+late connection responses, missing/rejected keys, and access without credentials.
+Recursive strict signature verification and `hdiutil verify` pass. Both bundled
+native helpers declare macOS 26.0 in their Mach-O build metadata.
+
+The packaged-profile check uses the shipped executable and frameworks in a
+temporary app copy with a test-only bootstrap loading the unchanged production
+ASAR. Native windows, tray, and shortcuts are suppressed. Keychain and provider
+responses are synthetic; no external model calls or real profile access occur.
+Two isolated profiles start with no Chat, Help history, drafts, or saved key.
+A newly created Chat, imported two-topic fixture, and unsent draft survive
+relaunch unchanged. Removing the key leaves both chats readable, including after
+another relaunch. The check verifies visible saved/rejected/accepted connection
+states using controlled responses; it does not establish live-provider access.
+The production ASAR contains only app code, renderer, two helpers, icons, and
+package metadata. The setup, connection state, and browsing reminder were
+visually inspected in screenshots from the isolated runtime.
+
+Reports and screenshots are in `artifacts/qa/first-run-profile-result.json`,
+`first-run-key-setup.png`, `first-run-connection-checked.png`, and
+`first-run-browse-without-key.png`. Run against a downloaded package with:
+
+```sh
+node scripts/check-desktop-profile.cjs "/path/Metafor.app/Contents/Resources/app.asar" "/path/Metafor.app/Contents/MacOS/Metafor"
+```
+
+## Earlier build: 0.4.9 — required API-key setup
 
 Fresh profiles show **Add API key** in the guide and require a key before
 leaving Settings. Empty keys are rejected by the renderer and native handler;
@@ -234,9 +270,9 @@ Synthetic and mocked checks do not establish these hardware and accuracy claims.
 
 ## Artifact
 
-`artifacts/mac/Metafor-0.4.9-arm64.dmg`
+`artifacts/mac/Metafor-0.4.10-arm64.dmg`
 
-SHA-256: `84a5f9b23d2faaa04d5f0efe00d745d51b2d90475089bd1a23e189784a193667`
+SHA-256: `26129433858f7fef7e4c03df82fb210bac45a5682b64d92070eb6009c6196db4`
 
 The Apple silicon build requires macOS 26 or later because of its native helper
 deployment target. This preview is ad-hoc signed, not Developer ID signed or

@@ -75,7 +75,7 @@ test("Open settings dismisses the guide and leads directly to model setup", asyn
   assert.ok(await ui.screen.findByLabelText("API key"));
 });
 
-test("a fresh profile must add its own key before leaving setup", async () => {
+test("a fresh profile sees required key setup and can browse without enabling AI", async () => {
   configured = false;
   let submitted = "";
   bridge.saveSettings = async (value) => { submitted = value.apiKey ?? ""; configured = true; return bridge.getSettings(); };
@@ -83,16 +83,24 @@ test("a fresh profile must add its own key before leaving setup", async () => {
   ui.fireEvent.click(await ui.screen.findByRole("button", { name: "Add API key" }));
   await ui.screen.findByRole("heading", { name: "Connect Metafor" });
   await ui.screen.findByDisplayValue("muse-spark-1.3");
-  assert.ok(!ui.screen.queryByRole("button", { name: "Close settings" }));
+  assert.ok(ui.screen.getByRole("button", { name: "Close settings" }));
   assert.equal((ui.screen.getByLabelText("API key") as HTMLInputElement).required, true);
-  ui.fireEvent.click(document.querySelector(".desktop-settings-shade")!);
-  assert.ok(ui.screen.getByRole("dialog", { name: "Metafor settings" }));
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Browse saved chats" }));
+  assert.ok(!ui.screen.queryByRole("dialog"));
+  assert.ok(ui.screen.getByLabelText("API key setup"));
+  ui.act(() => window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: { configured: false, hasSavedKey: false, credentialLoading: false } })));
+  assert.ok(!ui.screen.queryByRole("dialog"), "a status refresh cannot interrupt browsing");
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Add API key" }));
+  await ui.screen.findByDisplayValue("muse-spark-1.3");
   ui.fireEvent.submit(document.querySelector("form")!);
   assert.match((await ui.screen.findByRole("alert")).textContent!, /Enter your API key/);
   assert.equal(submitted, "");
   ui.fireEvent.change(ui.screen.getByLabelText("API key"), { target: { value: "fixture-key" } });
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
-  await ui.waitFor(() => assert.ok(!ui.screen.queryByRole("dialog")));
+  assert.match((await ui.screen.findByRole("status")).textContent!, /Settings saved/);
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Done" }));
+  assert.ok(!ui.screen.queryByRole("dialog"));
+  assert.ok(!ui.screen.queryByLabelText("API key setup"));
   assert.equal(submitted, "fixture-key");
 });
 
@@ -100,7 +108,7 @@ test("previously dismissed onboarding still opens setup when no key exists", asy
   complete = true; configured = false;
   ui.render(<ChatOverlays />);
   await ui.screen.findByRole("heading", { name: "Connect Metafor" });
-  assert.ok(!ui.screen.queryByRole("button", { name: "Close settings" }));
+  assert.ok(ui.screen.getByRole("button", { name: "Close settings" }));
 });
 
 test("Escape from first-run onboarding leads to key setup without bypassing it", async () => {

@@ -18,7 +18,7 @@ before(async () => {
   code = result.outputFiles[0].text;
 });
 
-async function start(directory: string, env: Record<string, string> = {}, failCredentialWrite = false, decryptedKey?: string | Promise<string>, encryption?: Promise<Buffer>, modelFixture = false) {
+async function start(directory: string, env: Record<string, string> = {}, failCredentialWrite = false, decryptedKey?: string | Promise<string>, encryption?: Promise<Buffer>, modelFixture: boolean | number = false) {
   const handlers = new Map<string, (...args: any[]) => any>();
   const windows: TestWindow[] = [];
   const alerts: string[] = [];
@@ -75,6 +75,7 @@ async function start(directory: string, env: Record<string, string> = {}, failCr
     fetch: async (url: string, init?: RequestInit) => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       providerRequests.push({ url: String(url), authorization: new Headers(init?.headers).get("authorization"), body });
+      if (typeof modelFixture === "number") return new Response("fixture rejected credential", { status: modelFixture });
       if (!modelFixture) return new Response("fixture provider unavailable", { status: 503 });
       if (String(url).endsWith("/models")) return Response.json({ data: [{ id: "muse-spark-1.3" }, { id: "muse-wonder-1.0" }] });
       const schema = body.response_format.json_schema.name;
@@ -369,4 +370,17 @@ test("model choice persists without touching credentials and routes Chat writer,
   const relaunched = await start(directory, {}, false, "retained-key");
   assert.equal((await relaunched.call("settings")).reasoningEffort, "medium");
   assert.equal((await relaunched.call("settings")).model, "muse-spark-1.3");
+}));
+
+
+test("desktop Chat points rejected and missing credentials to Settings", async () => profile(async (directory) => {
+  const runtime = await start(directory, {}, false, undefined, undefined, 401);
+  const request = { path: "/api/answer", body: { requestId: "credential-check", conversation: createConversation(), activeId: "root", question: "Fixture question", selection: null, mode: "auto", includeIds: [] } };
+  const missing = await runtime.call("api", request);
+  assert.equal(missing.body.code, "not_configured");
+  assert.match(missing.body.error, /API key in Settings/);
+  await runtime.call("save-settings", { ...valid, apiKey: "invalid-fixture-key" });
+  const rejected = await runtime.call("api", request);
+  assert.equal(rejected.body.code, "provider_credentials");
+  assert.equal(rejected.body.error, "The API key was rejected. Check Settings.");
 }));

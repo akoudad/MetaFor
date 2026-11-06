@@ -7,6 +7,7 @@ export default function ChatOverlays() {
   const [view, setView] = useState<"onboarding" | "settings" | null>(null);
   const [requiresKey, setRequiresKey] = useState(false);
   const keyRequired = useRef(false);
+  const dismissedSetup = useRef(false);
   useEffect(() => {
     let mounted = true; let opened = false; let initialized = false;
     let latest: DesktopSettings | undefined;
@@ -15,7 +16,7 @@ export default function ChatOverlays() {
       const value = (event as CustomEvent<DesktopSettings>).detail;
       if (!value) return;
       latest = value; keyRequired.current = needsKey(value); setRequiresKey(keyRequired.current);
-      if (initialized && needsKey(value)) setView((current) => current ?? "settings");
+      if (initialized && needsKey(value) && !dismissedSetup.current) setView((current) => current ?? "settings");
     };
     window.addEventListener("metafor-settings-changed", changed);
     const settings = window.metaforDesktop.onOpenSettings(() => { opened = true; setView("settings"); });
@@ -28,6 +29,6 @@ export default function ChatOverlays() {
     }).catch(() => { if (mounted && !opened) setView("settings"); });
     return () => { mounted = false; settings(); onboarding(); window.removeEventListener("metafor-settings-changed", changed); };
   }, []);
-  return view === "settings" ? <Settings requireKey={requiresKey} onClose={() => setView(keyRequired.current ? "settings" : null)} />
-    : view === "onboarding" ? <Onboarding requiresKey={requiresKey} onClose={(settings) => setView(settings || keyRequired.current ? "settings" : null)} /> : null;
+  return view === "settings" ? <Settings requireKey={requiresKey} onClose={() => { dismissedSetup.current = true; setView(null); }} />
+    : view === "onboarding" ? <Onboarding requiresKey={requiresKey} onClose={(settings) => setView(settings || keyRequired.current ? "settings" : null)} /> : requiresKey ? <aside className="desktop-setup-notice" aria-label="API key setup"><span>AI needs your API key. Saved chats remain available.</span><button onClick={() => setView("settings")}>Add API key</button></aside> : null;
 }

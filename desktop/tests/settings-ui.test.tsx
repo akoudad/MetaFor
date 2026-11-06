@@ -46,7 +46,8 @@ test("Settings retains a key recovery warning after saving model details without
   bridge.saveSettings = async () => ({ ...settings, configured: true, warnings: {} });
   ui.fireEvent.change(ui.screen.getByLabelText("API key"), { target: { value: "replacement" } });
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
-  await ui.waitFor(() => assert.equal(closed, 1));
+  assert.match((await ui.screen.findByRole("status")).textContent!, /Settings saved/);
+  assert.equal(closed, 0);
 });
 
 test("an unreadable saved key can be removed even though no usable key is configured", async () => {
@@ -59,7 +60,7 @@ test("an unreadable saved key can be removed even though no usable key is config
   assert.ok(!ui.screen.queryByRole("button", { name: "Remove key" }));
 });
 
-test("older settings responses without warnings still save and close normally", async () => {
+test("older settings responses without warnings still report saved settings", async () => {
   delete settings.warnings;
   settings.configured = true;
   bridge.saveSettings = async () => settings;
@@ -67,7 +68,8 @@ test("older settings responses without warnings still save and close normally", 
   await ui.screen.findByDisplayValue(settings.model);
   assert.ok(!ui.screen.queryByRole("alert"));
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
-  await ui.waitFor(() => assert.equal(closed, 1));
+  assert.match((await ui.screen.findByRole("status")).textContent!, /Settings saved/);
+  assert.equal(closed, 0);
 });
 
 test("a retained key remains removable while provider settings need recovery", async () => {
@@ -122,7 +124,8 @@ test("an unavailable startup shortcut is shown until a replacement registers", a
   ui.fireEvent.change(ui.screen.getByLabelText("Help shortcut"), { target: { value: "Alt+Shift+M" } });
   assert.ok(ui.screen.getByText(/Help shortcut Alt\+M is unavailable/), "an unsaved draft must not claim registration succeeded");
   ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
-  await ui.waitFor(() => assert.equal(closed, 1));
+  assert.match((await ui.screen.findByRole("status")).textContent!, /Settings saved/);
+  assert.equal(closed, 0);
   assert.equal((submitted as { shortcut: string }).shortcut, "Alt+Shift+M");
   assert.ok(!ui.screen.queryByText(/Help shortcut .* is unavailable/));
 });
@@ -136,4 +139,56 @@ test("saving with an unavailable shortcut keeps its warning visible", async () =
   await ui.waitFor(() => assert.equal((ui.screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled, false));
   assert.equal(closed, 0);
   assert.ok(ui.screen.getByText(/Help shortcut .* is unavailable/));
+});
+
+
+test("connection checks distinguish saved keys, verified access, and rejected credentials", async () => {
+  settings = { ...settings, configured: true, model: "muse-spark-1.3", baseURL: "https://api.meta.ai/v1", warnings: {} };
+  let checks = 0;
+  bridge.listModels = async () => { checks++; return { choices: [{ id: "spark-balanced", model: settings.model, name: "Spark", mode: "Balanced", reasoningEffort: "medium", description: "Fixture" }] }; };
+  ui.render(<Settings onClose={() => closed++} />);
+  assert.match((await ui.screen.findByRole("status")).textContent!, /has not been checked/);
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Check connection" }));
+  await ui.screen.findByText(/Connection verified: API key accepted/);
+  assert.equal(checks, 1);
+  bridge.listModels = async () => { throw new Error("The API key could not list models. Check it in Settings."); };
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Check connection" }));
+  assert.match((await ui.screen.findByRole("alert")).textContent!, /API key could not list models/);
+  assert.ok(!ui.screen.queryByText(/Connection verified/));
+  ui.fireEvent.change(ui.screen.getByLabelText("API key"), { target: { value: "unsaved-replacement" } });
+  assert.equal((ui.screen.getByRole("button", { name: "Check connection" }) as HTMLButtonElement).disabled, true);
+  assert.match(ui.screen.getByRole("status").textContent!, /Save these changes/);
+});
+
+test("custom providers never claim model-list verification", async () => {
+  settings = { ...settings, configured: true, warnings: {} };
+  ui.render(<Settings onClose={() => closed++} />);
+  await ui.screen.findByText(/Custom provider access is checked/);
+  assert.ok(!ui.screen.queryByRole("button", { name: "Check connection" }));
+});
+
+test("late connection results cannot verify a changed credential", async () => {
+  settings = { ...settings, configured: true, model: "muse-spark-1.3", baseURL: "https://api.meta.ai/v1", warnings: {} };
+  let finish!: (value: { choices: [] }) => void;
+  bridge.listModels = () => new Promise((resolve) => { finish = resolve; });
+  ui.render(<Settings onClose={() => closed++} />);
+  ui.fireEvent.click(await ui.screen.findByRole("button", { name: "Check connection" }));
+  ui.act(() => window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: { ...settings, configured: false, hasSavedKey: false } })));
+  await ui.act(async () => finish({ choices: [] }));
+  assert.ok(!ui.screen.queryByText(/API key accepted/));
+});
+
+
+test("normalized saved settings remain checkable without requiring another save", async () => {
+  settings = { ...settings, configured: true, model: "muse-spark-1.3", baseURL: "https://api.meta.ai/v1", warnings: {} };
+  bridge.saveSettings = async () => settings;
+  ui.render(<Settings onClose={() => closed++} />);
+  await ui.screen.findByDisplayValue(settings.model);
+  ui.fireEvent.change(ui.screen.getByLabelText("API base URL"), { target: { value: "https://api.meta.ai/v1/" } });
+  ui.fireEvent.change(ui.screen.getByLabelText("Model"), { target: { value: " muse-spark-1.3 " } });
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
+  await ui.screen.findByText(/Settings saved on this Mac/);
+  assert.equal((ui.screen.getByLabelText("API base URL") as HTMLInputElement).value, settings.baseURL);
+  assert.equal((ui.screen.getByLabelText("Model") as HTMLInputElement).value, settings.model);
+  assert.equal((ui.screen.getByRole("button", { name: "Check connection" }) as HTMLButtonElement).disabled, false);
 });
