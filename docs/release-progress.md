@@ -58,10 +58,19 @@ Cloudflare accepted project `metafor` with hostname `metafor.pages.dev` after
 the user signed in. The tested static files were uploaded through
 [Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/).
 Cloudflare confirmed deployment, and an unauthenticated browser received HTTP 200.
-The primary site's five static files match the tested website source.
+The primary site's static files match the tested website source.
 
 The [old address](https://getmetafor.akoudad-karim-contac.chatgpt.site/) remains
 live with the current installer and a footer link to the new address. Its Sites
 version 6 uses source `8115b0ce4df3076adcdc7858b610d962b639eee7`; deployment
 `appgdep_6aed67e9ada481918a868d5294510c1c` succeeded. Version 5 was saved but
 never deployed. Previous site versions and release `v0.4.9` remain for rollback.
+
+## Follow-ups
+
+- The primary website and README use [the short download URL](https://metafor.pages.dev/download).
+  Cloudflare `_redirects` sends `/download` and `/download/` directly to the
+  current GitHub-hosted installer with HTTP 302; no GitHub page is opened.
+  An actual short-link download matched the release checksum above.
+- Progressive creation of branches and sections is awaiting the user's visual
+  behavior confirmation. The existing scroll animation has not been changed.

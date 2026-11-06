@@ -1,7 +1,7 @@
 # MetaFor
 
 **[Website](https://metafor.pages.dev/)** ·
-[Download for Mac](https://github.com/akoudad/MetaFor/releases/download/v0.4.10/Metafor-0.4.10-arm64.dmg) ·
+[Download for Mac](https://metafor.pages.dev/download) ·
 [Watch demo](https://youtu.be/hBM_tifGJJk)
 
 ## Architecture
