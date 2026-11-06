@@ -17,6 +17,11 @@
     marker: element.querySelector('[data-journey-point], #journey-end'),
     y: 0
   }));
+  const guideItems = [...document.querySelectorAll('.section-guide a[href^="#"]')].map((link) => {
+    const section = $(link.getAttribute('href').slice(1));
+    return { link, section, marker: section && (section.querySelector('[data-journey-point], #journey-end, h2') || section), y: 0, top: 0 };
+  }).filter((item) => item.marker);
+  let currentGuide = null;
   let frame = 0;
   let measurePending = true;
   let mainTop = 0;
@@ -84,6 +89,10 @@
     setRoute('end', `M ${mid} ${mergeY} L ${end.x} ${end.y}`);
     journeyPoints.forEach((point) => { point.y = center(point.node).y; });
     reveals.forEach((item) => { item.y = center(item.marker).y; });
+    guideItems.forEach((item) => {
+      item.y = center(item.marker).y;
+      item.top = item.section.getBoundingClientRect().top + window.scrollY - mainTop;
+    });
     measurePending = false;
   }
   function lengthAtY(route, y) {
@@ -129,6 +138,24 @@
       item.element.style.setProperty('--journey-reveal', String(reveal));
       item.element.classList.toggle('is-unrevealed', reveal === 0);
     });
+    let activeGuide = guideItems[0];
+    guideItems.forEach((item) => {
+      if (item.y <= progressY && item.y >= activeGuide.y) activeGuide = item;
+    });
+    const targetGuide = guideItems.find((item) => item.section.matches(':target'));
+    if (targetGuide) {
+      const padding = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+      if (Math.abs(targetGuide.top + mainTop - window.scrollY - padding) <= 1) activeGuide = targetGuide;
+    }
+    if (activeGuide !== currentGuide) {
+      guideItems.forEach((item) => {
+        const active = item === activeGuide;
+        item.link.classList.toggle('is-current', active);
+        if (active) item.link.setAttribute('aria-current', 'location');
+        else item.link.removeAttribute('aria-current');
+      });
+      currentGuide = activeGuide;
+    }
     main.classList.add('journey-ready');
     const showDownload = $('hero-download').getBoundingClientRect().bottom < 0;
     $('floating-download').classList.toggle('is-visible', showDownload);

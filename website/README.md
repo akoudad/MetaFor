@@ -6,6 +6,7 @@ A minimal showcase for the MetaFor Mac app, with its black, starry identity.
 - **MetaFor Help:** ask about the current screen; Option + M is explained in its feature details.
 - A scroll-linked orb draws and splits into Chat and Help paths. Each heading and expandable detail appears as the orb reaches it; the demo appears when the paths reunite. Scrolling up reverses the lines and reveals without closing details. Future branches stay hidden. Reduced-motion mode shows static paths and all content; content also stays readable without JavaScript. Keyboard focus and section links reveal their destination.
 - LinkedIn, GitHub, and email links sit in the header. A floating download button appears after the hero download button scrolls out of view and stays clear of the demo video.
+- A compact scroll hint sits directly below the hero orb. A fixed side guide links to Start, Chat, Help, Demo, and Download and marks the current section. On narrow screens it uses dots with labels on hover or keyboard focus. The arrow nudges three times, with no motion when reduced motion is enabled.
 
 The page contains an actual app screenshot and the YouTube demo (`hBM_tifGJJk`). It does not call a model or capture a visitor's screen.
 

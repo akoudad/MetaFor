@@ -81,3 +81,10 @@ never deployed. Previous site versions and release `v0.4.9` remain for rollback.
   checks covered hidden, partial, full, and reverse states, stable geometry,
   expanded details, keyboard focus, anchor arrival/reversal, reduced motion,
   and no-JS reading. Report: `artifacts/scroll-reveal-qa/results.json`.
+- A visible scroll hint now sits below the hero orb, with a brief arrow nudge.
+  A persistent side guide links to each section and follows the orb's progress;
+  compact screens use dots with hover/focus labels. Mobile spacing keeps the
+  guide clear of the title, floating download button, and demo controls.
+  Desktop, phone, and landscape checks passed for cue visibility, mouse/keyboard
+  navigation, current-section updates, reduced motion, and collision-free video
+  controls. Report: `artifacts/cue-qa/final-summary.json`.
