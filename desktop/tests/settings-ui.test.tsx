@@ -61,6 +61,7 @@ test("an unreadable saved key can be removed even though no usable key is config
 
 test("older settings responses without warnings still save and close normally", async () => {
   delete settings.warnings;
+  settings.configured = true;
   bridge.saveSettings = async () => settings;
   ui.render(<Settings onClose={() => closed++} />);
   await ui.screen.findByDisplayValue(settings.model);
@@ -113,7 +114,7 @@ test("a retained key can be removed during unlock without clearing an unsaved re
 });
 
 test("an unavailable startup shortcut is shown until a replacement registers", async () => {
-  settings = { ...settings, shortcut: "Alt+M", shortcutRegistered: false, warnings: {} };
+  settings = { ...settings, configured: true, shortcut: "Alt+M", shortcutRegistered: false, warnings: {} };
   let submitted: unknown;
   bridge.saveSettings = async (value) => { submitted = value; return { ...settings, shortcut: value.shortcut, shortcutRegistered: true }; };
   ui.render(<Settings onClose={() => closed++} />);
@@ -127,7 +128,7 @@ test("an unavailable startup shortcut is shown until a replacement registers", a
 });
 
 test("saving with an unavailable shortcut keeps its warning visible", async () => {
-  settings = { ...settings, shortcutRegistered: false, warnings: {} };
+  settings = { ...settings, configured: true, shortcutRegistered: false, warnings: {} };
   bridge.saveSettings = async () => settings;
   ui.render(<Settings onClose={() => closed++} />);
   await ui.screen.findByText(/Help shortcut .* is unavailable/);

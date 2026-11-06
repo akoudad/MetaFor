@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./onboarding.css";
 
-export default function Onboarding({ onClose }: { onClose: (settings?: boolean) => void }) {
+export default function Onboarding({ onClose, requiresKey = false }: { onClose: (settings?: boolean) => void; requiresKey?: boolean }) {
   const panel = useRef<HTMLElement>(null);
   const start = useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = useState(false);
@@ -40,9 +40,9 @@ export default function Onboarding({ onClose }: { onClose: (settings?: boolean) 
         <ol><li>Press <strong>Option + M</strong> over any app.</li><li>Ask about your screen in the compact bar.</li><li>Press it again to hide Help.</li></ol>
       </section>
     </div>
-    <p className="onboarding-setup">Add your API key in <strong>Settings</strong> (<span>⌘,</span>). Help asks for Screen Recording permission when first used; screen questions share a snapshot with your chosen model.</p>
+    <p className="onboarding-setup"><strong>Your own API key is required</strong> to ask questions in Chat or Help. Add it in Settings (<span>⌘,</span>). Help asks for Screen Recording permission when first used; screen questions share a snapshot with your chosen model.</p>
     {error && <p className="onboarding-error" role="alert">{error}</p>}
-    <footer>{error && <button disabled={busy} onClick={() => onClose()}>Close for now</button>}<button disabled={busy} onClick={() => void finish(true)}>Open settings</button><button ref={start} className="onboarding-start" disabled={busy} onClick={() => void finish()}>{busy ? "Saving…" : "Get started"}</button></footer>
+    <footer>{error && <button disabled={busy} onClick={() => onClose(requiresKey)}>{requiresKey ? "Continue to setup" : "Close for now"}</button>}{!requiresKey && <button disabled={busy} onClick={() => void finish(true)}>Open settings</button>}<button ref={start} className="onboarding-start" disabled={busy} onClick={() => void finish(requiresKey)}>{busy ? "Saving…" : requiresKey ? "Add API key" : "Get started"}</button></footer>
     <p className="onboarding-reopen">Find this guide again in Metafor → Quick start.</p>
   </section></div>;
 }

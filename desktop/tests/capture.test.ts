@@ -608,7 +608,7 @@ test("a reserved shortcut is reported and cannot replace saved preferences", asy
   const runtime = await start(directory, { shortcutAvailable: false });
   const original = await readFile(path.join(directory, "preferences.json"), "utf8");
   assert.equal((await runtime.call("chat", "settings")).shortcutRegistered, false);
-  await assert.rejects(runtime.call("chat", "save-settings", { ...valid, shortcut: "Alt+M" }), /Settings could not be saved/);
+  await assert.rejects(runtime.call("chat", "save-settings", { ...valid, apiKey: "fixture-key", shortcut: "Alt+M" }), /Settings could not be saved/);
   assert.equal(await readFile(path.join(directory, "preferences.json"), "utf8"), original);
   assert.equal((await runtime.call("chat", "settings")).shortcut, valid.shortcut);
 }));

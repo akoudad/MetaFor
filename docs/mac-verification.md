@@ -1,8 +1,35 @@
-# Mac verification — 2026-11-05
+# Mac verification — 2026-11-06
 
 Desktop worktree: `metafor-mac`, branch `feat/macos-app`.
 
-## Current build: 0.4.8 — first-open guide
+## Current build: 0.4.9 — required API-key setup
+
+Fresh profiles show **Add API key** in the guide and require a key before
+leaving Settings. Empty keys are rejected by the renderer and native handler;
+relaunching after dismissing the guide still opens setup. Existing encrypted-key
+recovery remains available without overwriting history or requiring a new key.
+
+All 214 desktop tests, TypeScript, and the Apple silicon DMG build pass. Tests
+cover keyless setup, relaunch, delayed Keychain status, delayed guide completion,
+and retained-key recovery. Strict recursive signature verification and
+`hdiutil verify` pass.
+
+`node scripts/check-desktop-profile.cjs` ran the packaged 0.4.9 main process,
+preload, renderer, and Chromium storage against two temporary profiles. Both
+started with zero chats, topics, Help exchanges, and saved credentials. Required
+setup rejected a blank key, survived a keyless relaunch, and accepted a synthetic
+key. A saved two-topic fixture and unsent draft survived relaunch unchanged;
+the second profile remained empty. The ASAR contains only app code, renderer,
+helpers, images, and package metadata.
+
+The check hides native windows and suppresses tray/shortcut registration. Keychain
+is mocked and all provider requests are blocked; zero were attempted. It does
+not read or modify the real profile or prove live-provider authentication. The
+rendered setup was visually checked. Reports:
+`artifacts/qa/first-run-profile-result.json` and
+`artifacts/qa/first-run-key-setup.png`.
+
+## Earlier build: 0.4.8 — first-open guide
 
 The native Chat window introduces Chat and Help on first open, including the
 Option + M toggle and API-key setup. Completion is saved separately from model
@@ -207,9 +234,9 @@ Synthetic and mocked checks do not establish these hardware and accuracy claims.
 
 ## Artifact
 
-`artifacts/mac/Metafor-0.4.8-arm64.dmg`
+`artifacts/mac/Metafor-0.4.9-arm64.dmg`
 
-SHA-256: `224c6c9fdcd6b2a3d44642ca78d2113a82fc5422e4800a0638eae17b3804841e`
+SHA-256: `84a5f9b23d2faaa04d5f0efe00d745d51b2d90475089bd1a23e189784a193667`
 
 The Apple silicon build requires macOS 26 or later because of its native helper
 deployment target. This preview is ad-hoc signed, not Developer ID signed or

@@ -13,6 +13,8 @@ let ChatOverlays: typeof import("../renderer/ChatOverlays").default;
 let bridge: DesktopBridge;
 let complete = false;
 let saves = 0;
+let configured = true;
+let credentialLoading = false;
 let openSettings: () => void;
 let openGuide: () => void;
 
@@ -24,13 +26,13 @@ before(async () => {
   [ui, { default: ChatOverlays }] = await Promise.all([import("@testing-library/react"), import("../renderer/ChatOverlays")]);
 });
 beforeEach(() => {
-  complete = false; saves = 0;
+  complete = false; saves = 0; configured = true; credentialLoading = false;
   bridge = {
     onboardingComplete: async () => complete,
     completeOnboarding: async () => { saves++; complete = true; },
     onOpenOnboarding: (callback) => { openGuide = callback; return () => { openGuide = () => {}; }; },
     onOpenSettings: (callback) => { openSettings = callback; return () => { openSettings = () => {}; }; },
-    getSettings: async () => ({ configured: false, model: "muse-spark-1.3", baseURL: "https://api.meta.ai/v1", shortcut: "Alt+M", shortcutRegistered: true, screenPermission: "not-determined", storagePath: "/fixture" }),
+    getSettings: async () => ({ configured, credentialLoading, model: "muse-spark-1.3", baseURL: "https://api.meta.ai/v1", shortcut: "Alt+M", shortcutRegistered: true, screenPermission: "not-determined", storagePath: "/fixture" }),
   } as DesktopBridge;
   window.metaforDesktop = bridge;
 });
@@ -44,7 +46,7 @@ test("first open explains Chat, Help, and the shortcut, then stays dismissed unt
   assert.ok(ui.screen.getByRole("heading", { name: "Metafor Help" }));
   assert.ok(ui.screen.getByText("Option + M"));
   assert.ok(ui.screen.getByText("Press it again to hide Help."));
-  assert.ok(ui.screen.getByText(/Add your API key in/));
+  assert.ok(ui.screen.getByText("Your own API key is required"));
   const start = ui.screen.getByRole("button", { name: "Get started" });
   assert.equal(document.activeElement, start);
   ui.fireEvent.keyDown(start, { key: "Tab" });
@@ -71,6 +73,63 @@ test("Open settings dismisses the guide and leads directly to model setup", asyn
   assert.equal(complete, true);
   assert.ok(!ui.screen.queryByRole("dialog", { name: "Welcome to Metafor" }));
   assert.ok(await ui.screen.findByLabelText("API key"));
+});
+
+test("a fresh profile must add its own key before leaving setup", async () => {
+  configured = false;
+  let submitted = "";
+  bridge.saveSettings = async (value) => { submitted = value.apiKey ?? ""; configured = true; return bridge.getSettings(); };
+  ui.render(<ChatOverlays />);
+  ui.fireEvent.click(await ui.screen.findByRole("button", { name: "Add API key" }));
+  await ui.screen.findByRole("heading", { name: "Connect Metafor" });
+  await ui.screen.findByDisplayValue("muse-spark-1.3");
+  assert.ok(!ui.screen.queryByRole("button", { name: "Close settings" }));
+  assert.equal((ui.screen.getByLabelText("API key") as HTMLInputElement).required, true);
+  ui.fireEvent.click(document.querySelector(".desktop-settings-shade")!);
+  assert.ok(ui.screen.getByRole("dialog", { name: "Metafor settings" }));
+  ui.fireEvent.submit(document.querySelector("form")!);
+  assert.match((await ui.screen.findByRole("alert")).textContent!, /Enter your API key/);
+  assert.equal(submitted, "");
+  ui.fireEvent.change(ui.screen.getByLabelText("API key"), { target: { value: "fixture-key" } });
+  ui.fireEvent.click(ui.screen.getByRole("button", { name: "Save settings" }));
+  await ui.waitFor(() => assert.ok(!ui.screen.queryByRole("dialog")));
+  assert.equal(submitted, "fixture-key");
+});
+
+test("previously dismissed onboarding still opens setup when no key exists", async () => {
+  complete = true; configured = false;
+  ui.render(<ChatOverlays />);
+  await ui.screen.findByRole("heading", { name: "Connect Metafor" });
+  assert.ok(!ui.screen.queryByRole("button", { name: "Close settings" }));
+});
+
+test("Escape from first-run onboarding leads to key setup without bypassing it", async () => {
+  configured = false;
+  ui.render(<ChatOverlays />);
+  ui.fireEvent.keyDown(await ui.screen.findByRole("button", { name: "Add API key" }), { key: "Escape" });
+  await ui.screen.findByRole("heading", { name: "Connect Metafor" });
+});
+
+test("a delayed no-key result opens setup while retained-key unlock leaves chats accessible", async () => {
+  complete = true; configured = false; credentialLoading = true;
+  ui.render(<ChatOverlays />);
+  await ui.act(async () => {});
+  assert.ok(!ui.screen.queryByRole("dialog"));
+  ui.act(() => window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: { configured: false, hasSavedKey: true, credentialLoading: true } })));
+  assert.ok(!ui.screen.queryByRole("dialog"));
+  ui.act(() => window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: { configured: false, hasSavedKey: false, credentialLoading: false } })));
+  await ui.screen.findByRole("heading", { name: "Connect Metafor" });
+});
+
+test("late guide completion cannot bypass a newly resolved API-key requirement", async () => {
+  configured = false; credentialLoading = true;
+  let finish!: () => void;
+  bridge.completeOnboarding = () => new Promise((resolve) => { finish = resolve; });
+  ui.render(<ChatOverlays />);
+  ui.fireEvent.click(await ui.screen.findByRole("button", { name: "Get started" }));
+  ui.act(() => window.dispatchEvent(new window.CustomEvent("metafor-settings-changed", { detail: { configured: false, hasSavedKey: false, credentialLoading: false } })));
+  await ui.act(async () => finish());
+  await ui.screen.findByRole("heading", { name: "Connect Metafor" });
 });
 
 test("settings recovery takes priority over a delayed first-open check", async () => {

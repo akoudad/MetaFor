@@ -213,6 +213,23 @@ test("fresh profiles register the new default while saved user shortcuts remain 
   }
 }));
 
+test("a fresh profile contains no Help or key and rejects keyless setup without writing settings", async () => profile(async (directory) => {
+  const runtime = await start(directory);
+  const settings: DesktopSettings = await runtime.call("settings");
+  assert.equal(settings.configured, false);
+  assert.equal(settings.hasSavedKey, false);
+  assert.equal((await runtime.call("list-help")).length, 0);
+  assert.equal(await runtime.call("onboarding-complete"), false);
+  for (const apiKey of [undefined, "", "   "]) await assert.rejects(runtime.call("save-settings", { ...valid, apiKey }), /Enter your API key/);
+  await assert.rejects(readFile(path.join(directory, "preferences.json")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(directory, "credential.enc")), { code: "ENOENT" });
+  assert.equal(runtime.providerRequests.length, 0);
+  const connected: DesktopSettings = await runtime.call("save-settings", { ...valid, apiKey: "fixture-key" });
+  assert.equal(connected.configured, true);
+  const relaunched = await start(directory, {}, false, "fixture-key");
+  assert.equal((await relaunched.call("settings")).configured, true);
+}));
+
 
 test("a failed owner key import restores original preferences and never pairs a new key with an old endpoint", async () => profile(async (directory) => {
   const previous = JSON.stringify(valid);

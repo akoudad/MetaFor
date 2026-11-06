@@ -553,6 +553,7 @@ function installIPC() {
     if (settingsBusy) throw new Error("Wait for the current settings change to finish.");
     const next = validateModelConfig(input);
     if (input.apiKey !== undefined && (typeof input.apiKey !== "string" || input.apiKey.length > 4096 || /[\r\n\0]/.test(input.apiKey))) throw new Error("The API key is invalid.");
+    if (!credential && !hasSavedKey && !input.apiKey?.trim()) throw new Error("Enter your API key to connect Metafor.");
     if (typeof input.shortcut !== "string") throw new Error("Choose a valid shortcut.");
     settingsBusy = true;
     const previous = config;
