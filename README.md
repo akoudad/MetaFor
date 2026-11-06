@@ -1,5 +1,9 @@
 # MetaFor
 
+**[Website](https://metafor.pages.dev/)** ·
+[Download for Mac](https://github.com/akoudad/MetaFor/releases/download/v0.4.10/Metafor-0.4.10-arm64.dmg) ·
+[Watch demo](https://youtu.be/hBM_tifGJJk)
+
 ## Architecture
 
 MetaFor uses a shared React and TypeScript conversation engine:
@@ -28,10 +32,6 @@ Help sends screen snapshots with your questions and requires Screen Recording
 permission.
 
 ## Get started
-
-[Website](https://metafor.pages.dev) ·
-[Watch demo](https://youtu.be/hBM_tifGJJk) ·
-[Download for Mac — Apple silicon](https://github.com/akoudad/MetaFor/releases/download/v0.4.10/Metafor-0.4.10-arm64.dmg)
 
 The Mac app requires **Apple silicon, macOS 26+**, an internet connection, and
 **your own model API key**. Move the app from the DMG into Applications, then

@@ -17,6 +17,7 @@ Recovered without resetting files or replacing the existing implementation.
 - [x] Scroll-linked branching, reversal, expanded details, and reduced motion pass.
 - [x] Floating download stays accessible and clears video controls.
 - [x] Concise README includes architecture, demo, installation, API setup, and tests.
+  Website, direct Mac download, and demo links appear immediately below the title.
 - [x] [metafor.pages.dev](https://metafor.pages.dev/) is live; README and GitHub
   About use it. Its download button delivers the verified final installer.
 
