@@ -1,34 +1,34 @@
-# metafor
+# MetaFor
 
-Explore an AI conversation by topic without losing your place.
+Spatial AI conversations and assistance beside your work.
 
-Select a passage and click **Ask about this**. Write and send your annotation
-beside the passage; your normal question draft stays separate. Read its explanation,
-explore connected topics, and return to the original answer. Reading positions, drafts,
-and exact passage sources are preserved. Add questions to several passages and
-send them together for separate replies. On a wide screen, a focused reply opens
-beside its source.
+[Website](https://getmetafor.akoudad-karim-contac.chatgpt.site) ·
+[Download for Mac — Apple silicon](https://github.com/akoudad/MetaFor/releases/download/v0.4.8/Metafor-0.4.8-arm64.dmg)
 
-The model can keep a brief answer together, split substantial independent
-subjects, reuse existing topics, or combine ideas into a new synthesis topic.
-Synthesis links back to its inputs and keeps the originals. Placement is a model
-decision; it is not guaranteed to match your preferred grouping.
+## MetaFor Chat
 
-Scroll inside a topic to read; scroll in empty space to move toward details or
-back toward the overview. Choose a title when the conversation splits.
-**Back** restores your previous reading place. **Conversation map** shows the
-whole shape; hover a dot to see its title and click to jump. Drag topics to arrange
-them, or pinch to zoom. The controls above the question input show how to return
-to the parent, explore deeper topics, or resume reading from the overview.
-Chats save in your browser. Export `.ingx` to carry the
-conversation, connections, and view state together.
+Explore conversations as connected topics. Ask about a selected passage, follow
+related ideas, and return to your reading position. The conversation map keeps
+the structure visible. Chats save locally and can be exported as `.ingx` files.
 
-[Demo](docs/demo.md) · [Architecture](docs/architecture.md) ·
-[Deployment](docs/deployment.md) · [Release checks](docs/hackathon.md)
+## MetaFor Help
 
-## Run locally
+Press **⌥M (Option + M)** to open a compact screen assistant. Ask about your
+current app, select a region, or annotate a saved snapshot. Answers can include
+visual pointers over the screen. Continue an exchange in Chat to explore it
+further.
 
-Requires Node.js 22 and a Meta Model API key.
+Help sends screen snapshots to your configured model when you ask a question;
+it does not continuously watch or control your computer. See the
+[Mac app guide](https://github.com/akoudad/MetaFor/blob/feat/macos-app/docs/mac-app.md)
+for setup, permissions, and storage details.
+
+## Development
+
+This branch contains the web prototype and website. The Mac app lives on
+[`feat/macos-app`](https://github.com/akoudad/MetaFor/tree/feat/macos-app).
+
+To run the web prototype, use Node.js 22 and a Meta Model API key:
 
 ```sh
 npm ci
@@ -36,13 +36,7 @@ cp -n .env.example .env.local
 ```
 
 Set `MODEL_API_KEY` in `.env.local`, then run `npm run dev` and open
-[127.0.0.1:3000](http://127.0.0.1:3000).
-
-Each answer uses two sequential `muse-spark-1.3` calls: a writer produces content,
-then an organizer assigns its sections to topics. The app validates the plan
-before changing the conversation. Credentials stay on the server.
-
-## Verify
+[127.0.0.1:3000](http://127.0.0.1:3000). Credentials stay on the server.
 
 ```sh
 npm test
@@ -51,9 +45,5 @@ npm run build
 npm start
 ```
 
-Optional live checks make paid calls: `scripts/live-smoke.ts` uses up to six;
-`scripts/live-graph-smoke.ts` uses up to eight;
-`scripts/live-annotation-smoke.ts` uses six. Run them with `npx tsx` against a
-configured local server. See the [demo instructions](docs/demo.md).
-
-Voice, collaboration, and cloud sync are outside this build.
+[Demo](docs/demo.md) · [Architecture](docs/architecture.md) ·
+[Deployment](docs/deployment.md) · [Release checks](docs/hackathon.md)

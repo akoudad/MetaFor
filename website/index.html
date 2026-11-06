@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#050607">
+  <meta name="description" content="MetaFor for Mac. Explore AI conversations as connected topics, or ask for help with what is on your screen.">
+  <meta property="og:title" content="MetaFor — a conversation you can explore">
+  <meta property="og:description" content="Follow an idea. Go deeper. Come back. Explore Chat and on-screen Help, then try the Mac app.">
+  <title>MetaFor — a conversation you can explore</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="starfield" aria-hidden="true"></div>
+  <header class="site-header">
+    <a class="wordmark" href="#" aria-label="MetaFor home">MetaFor<span class="brand-star" aria-hidden="true">✦</span></a>
+    <nav aria-label="Main navigation">
+      <a href="#chat">Chat</a>
+      <a href="#help">Help</a>
+      <a class="nav-download" href="#download">Get the Mac app <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title" id="intro">
+  <div class="hero-orb" aria-hidden="true"><span class="orb"></span></div>
+  <p class="eyebrow">FOR YOUR MAC</p>
+  <h1 id="hero-title">MetaFor</h1>
+  <div class="hero-intro">
+    <p><strong>MetaFor Chat.</strong> A conversation you can explore.</p>
+    <p><strong>MetaFor Help.</strong> AI beside you, on the screen you’re already using.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="button button-primary" href="https://github.com/akoudad/MetaFor/releases/download/v0.4.8/Metafor-0.4.8-arm64.dmg">Download for Mac <span aria-hidden="true">↗</span></a>
+    <span class="hero-platform">A Mac app · Apple silicon · macOS 26+</span>
+  </div>
+  <p class="hero-shortcut">Your shortcut to Help: <kbd>⌥ M</kbd> <span>Option + M</span></p>
+  <div class="feature-tree" aria-label="Explore MetaFor’s two features">
+    <span class="tree-stem" aria-hidden="true"></span>
+    <div class="feature-forks">
+      <details class="feature-branch" id="chat-branch">
+        <summary><span class="branch-number">01</span><span>MetaFor Chat</span><span class="branch-plus" aria-hidden="true">+</span></summary>
+        <p>Start with a question. Follow any part of the answer into its own topic, then return exactly where you left off.</p>
+        <div class="branch-leaves"><span>Explore a passage</span><span>Follow a connection</span><span>Keep the whole picture</span></div>
+        <a class="text-link" href="#chat">Try the conversation preview ↗</a>
+      </details>
+      <details class="feature-branch" id="help-branch">
+        <summary><span class="branch-number">02</span><span>MetaFor Help</span><span class="branch-plus" aria-hidden="true">+</span></summary>
+        <p>Press Option + M over a website, PDF, or app. Ask naturally. Help uses your current screen to explain, translate, or point to what matters.</p>
+        <div class="branch-leaves"><span>Understand a page</span><span>Find an element</span><span>Translate a passage</span></div>
+        <a class="text-link" href="#help">See Help in action ↗</a>
+      </details>
+    </div>
+  </div>
+  <a class="scroll-invitation" href="#chat">Follow an idea <span aria-hidden="true">↓</span></a>
+</section>
+
+    <section class="feature-section chat-section" id="chat" aria-labelledby="chat-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">01 / CHAT</p><h2 id="chat-title">Give your thoughts room.</h2></div>
+        <p>An answer can open into topics. Explore one, ask about a passage, or bring ideas together again.</p>
+      </div>
+      <div class="demo-shell chat-demo" aria-label="Interactive demonstration of MetaFor Chat">
+        <div class="demo-topbar"><span class="demo-wordmark">MetaFor</span><span class="demo-badge">Interactive preview</span><button class="quiet-button" id="reset-chat" type="button">Restart <span aria-hidden="true">↺</span></button></div>
+        <div class="demo-workspace">
+          <div class="chat-canvas">
+            <div class="breadcrumb" id="demo-breadcrumb"></div>
+            <div class="scene-stage" id="scene-stage" tabindex="-1"></div>
+            <div class="demo-composer"><span class="orb" aria-hidden="true"></span><div><span class="composer-label" id="composer-label">A question opens a conversation</span><p id="demo-prompt">How can I make more time for creative work?</p></div></div>
+          </div>
+          <aside class="demo-rail" aria-label="Conversation overview">
+            <div class="rail-heading">Conversation <span id="turn-count">1</span></div>
+            <div class="transcript" id="demo-transcript"></div>
+            <div class="mini-map-wrap"><div class="rail-heading">Conversation map</div><svg id="demo-map" viewBox="0 0 200 125" role="img" aria-label="Current conversation connections"></svg><span class="map-hint">Choose a topic to jump</span></div>
+          </aside>
+        </div>
+        <div class="demo-caption"><span id="chat-caption" role="status">Start with the whole idea. Then choose a direction.</span><span class="step-counter" id="chat-step">01 / 04</span></div>
+      </div>
+      <div class="feature-notes"><p><span>Explore a passage</span>Select text and ask a question right beside it.</p><p><span>Keep your place</span>Return to the overview or use the conversation text to jump.</p><p><span>Take it with you</span>Save locally. Export the conversation and its connections as .ingx.</p></div>
+    </section>
+
+    <section class="product-capture" id="inside" aria-labelledby="inside-title">
+  <div class="section-heading"><p class="eyebrow">INSIDE THE APP</p><h2 id="inside-title">The text and the whole picture.</h2><p>Read the conversation normally. Jump into a topic on the map. Both views stay connected.</p></div>
+  <figure><img src="./images/chat.png" width="1440" height="1000" loading="lazy" alt="MetaFor Chat showing a detailed answer, a narrow conversation reader, and its connected conversation map."><figcaption>Actual Mac app · A conversation about HTTP caching</figcaption></figure>
+</section>
+
+<section class="feature-section help-section" id="help" aria-labelledby="help-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">02 / HELP</p><h2 id="help-title">Right where you are.</h2></div>
+        <p>A small bar over your current app. Ask about what you see. Get an answer, a translation, or a pointer on your screen.</p>
+      </div>
+      <div class="help-controls" aria-label="Choose a Help demonstration">
+        <button class="demo-tab active" data-help-mode="guide" aria-pressed="true" type="button">Find your way <span aria-hidden="true">↗</span></button>
+        <button class="demo-tab" data-help-mode="translate" aria-pressed="false" type="button">Understand a passage <span aria-hidden="true">↗</span></button>
+      </div>
+      <div class="demo-shell help-demo" aria-label="Illustrated preview of MetaFor Help">
+        <div class="mock-window-bar"><span class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></span><span id="mock-app-title">Fieldnotes — project workspace</span><span class="demo-badge">Illustrated preview</span></div>
+        <div class="mock-screen" id="mock-screen">
+          <div class="mock-sidebar" aria-hidden="true"><strong>fieldnotes<span>®</span></strong><span class="mock-nav-selected">Overview</span><span>Projects</span><span>Notes</span><span>People</span><span class="mock-sidebar-bottom">Your workspace</span></div>
+          <div class="mock-page" id="mock-page">
+            <div class="mock-page-top"><span>WORKSPACE / PROJECTS</span><span>KA</span></div>
+            <div class="mock-page-heading"><div><p>Thursday, a fresh start.</p><h3>A little room to think.</h3></div><span class="mock-new-button">New project <span>+</span></span></div>
+            <div class="mock-projects"><div><span class="project-art art-one"><i></i></span><small>IN PROGRESS</small><h4>The next chapter</h4><p>Ideas for something new.</p></div><div><span class="project-art art-two"><i></i></span><small>EXPLORING</small><h4>Ways of seeing</h4><p>A collection of observations.</p></div><div><span class="project-art art-three"><i></i></span><small>JUST STARTED</small><h4>Open questions</h4><p>Things worth following.</p></div></div>
+            <div class="mock-page-footer"><span>RECENT ACTIVITY</span><p>You have space for a new idea.</p></div>
+          </div>
+          <div class="mock-document" id="mock-document" hidden><span class="document-kicker">NOTES ON ATTENTION / 01</span><h3>De la place<br>pour les idées.</h3><p>Les bonnes idées ont besoin de temps et d’espace pour prendre forme.</p><p class="translation-source" id="translation-source">La curiosité est le point de départ de toute découverte.</p><p>Prendre un moment pour observer, puis poser une question. Revenir, explorer, et trouver un autre chemin.</p><span class="document-page">01</span></div>
+          <div class="screen-pointer" id="screen-pointer" hidden><span id="pointer-label">Start a new project here</span></div>
+          <div class="translation-callout" id="translation-callout" hidden><span>ENGLISH</span><p>Curiosity is the starting point of every discovery.</p></div>
+          <button class="invoke-help" id="invoke-help" type="button"><span class="orb" aria-hidden="true"></span>Try Help <kbd>⌥ M</kbd></button>
+          <div class="help-overlay" id="help-overlay" hidden>
+            <div class="help-answer" id="help-answer" hidden><div class="help-answer-header"><span>MetaFor</span><button type="button" id="dismiss-answer" aria-label="Hide demonstration answer">×</button></div><p id="help-answer-copy"></p></div>
+            <div class="help-bar"><span class="orb" id="help-orb" aria-hidden="true"></span><div><span class="composer-label" id="help-state">Help is ready</span><p id="help-question">Where do I start a new project?</p></div><button class="send-help" id="send-help" aria-label="Ask the demonstration question" type="button">↑</button><button class="close-help" id="close-help" aria-label="Close Help preview" type="button">×</button></div>
+          </div>
+        </div>
+        <div class="demo-caption"><span id="help-caption" role="status">Press “Try Help” to see the compact bar over this example workspace.</span><span class="shortcut-note">⌥ M · open / close</span></div>
+      </div>
+      <div class="feature-notes"><p><span>No switching windows</span>Help appears over the app you’re using.</p><p><span>Answers in context</span>Read a quick reply or see the relevant part highlighted.</p><p><span>Keep the thought going</span>Continue a Help conversation in MetaFor Chat.</p></div>
+    </section>
+
+    <section class="film-section" id="film" aria-labelledby="film-title">
+  <p class="eyebrow">A CLOSER LOOK</p><h2 id="film-title">See the flow.</h2>
+  <div class="film-placeholder"><span class="orb" aria-hidden="true"></span><p>Demo film coming soon</p><span>For now, explore the previews above or try the Mac app.</span></div>
+</section>
+
+<section class="download-section" id="download" aria-labelledby="download-title">
+      <div class="download-orbit" aria-hidden="true"><span class="orb"></span></div>
+      <p class="eyebrow">TWO WAYS IN. ONE METAFOR.</p>
+      <h2 id="download-title">Try it on your Mac.</h2>
+      <p class="download-intro">The full experience lives in the app.<br>Connected conversations. Help on your screen.</p>
+      <a class="button button-primary download-button" href="https://github.com/akoudad/MetaFor/releases/download/v0.4.8/Metafor-0.4.8-arm64.dmg">Download MetaFor <span aria-hidden="true">↓</span></a>
+      <p class="download-meta">v0.4.8 preview · Apple silicon · macOS 26+ · 116 MB</p>
+      <div class="setup-steps"><p><span>01</span>Move MetaFor to Applications. The welcome guide introduces Chat, Help, and your shortcut.</p><p><span>02</span>Add your model API key in Settings.</p><p><span>03</span>Open Chat, or press <kbd>⌥ M</kbd> for Help.</p></div>
+      <div class="download-details"><p>Requires your own model API key and an internet connection. Help needs macOS Screen Recording permission.</p><p>This preview is not notarized. macOS may ask you to allow it in Privacy &amp; Security.</p><a class="text-link" href="https://github.com/akoudad/MetaFor/blob/feat/macos-app/docs/mac-app.md" target="_blank" rel="noopener noreferrer">Installation guide <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/akoudad/MetaFor/releases/tag/v0.4.8" target="_blank" rel="noopener noreferrer">Release &amp; checksum <span aria-hidden="true">↗</span></a></div>
+    </section>
+  </main>
+<nav class="site-map" aria-label="Page map">
+  <span class="site-map-title">Explore MetaFor</span>
+  <a href="#intro" aria-current="location"><i></i><span>Start</span></a>
+  <a href="#chat"><i></i><span>Chat</span></a>
+  <a href="#inside"><i></i><span>Inside the app</span></a>
+  <a href="#help"><i></i><span>Help</span></a>
+  <a href="#film"><i></i><span>Demo film</span></a>
+  <a href="#download"><i></i><span>Get the app</span></a>
+</nav>
+  <footer class="site-footer"><a class="wordmark" href="#">MetaFor<span class="brand-star" aria-hidden="true">✦</span></a><span>Made by Karim Akoudad.</span><a href="https://github.com/akoudad/MetaFor" target="_blank" rel="noopener noreferrer">GitHub ↗</a></footer>
+</body>
+</html>
