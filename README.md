@@ -1,75 +1,30 @@
-# Metafor
+# MetaFor
 
-Metafor combines spatial AI conversations with screen assistance in a macOS app.
+**[Website](https://metafor.pages.dev/)** · **[Download for Mac](https://metafor.pages.dev/download)** · **[Watch demo](https://youtu.be/hBM_tifGJJk)**
 
-## Metafor Chat
+Explore AI conversations as connected topics, or ask for help with the screen
+you’re using.
 
-Explore a conversation as connected topics. Ask follow-up questions about a
-selected passage, read related answers, and return to your previous reading
-position. The model organizes answers into topics and can connect a synthesis
-to its source topics.
+## Chat and Help
 
-A narrow conversation panel above **Conversation map** keeps the full exchange
-available in reading order. It scrolls independently; click an answer to reveal
-its section in the graph. Chats save locally. Export and import `.ingx` files to
-move conversations between the browser and Mac app.
+**MetaFor Chat** lets you follow a topic, ask about a selected passage, and
+return to your place. Read the conversation in order or explore its connections
+on the map.
 
-## Metafor Help
+**MetaFor Help** opens over your current app with **Option + M**. Ask for an
+explanation, translation, or visual pointer. Each screen question shares a
+snapshot with your chosen model. Continue in Chat when you want to explore further.
 
-Press **⌥M (Option + M)** to open a compact bar above your current app. Ask about
-your screen, select a region, or annotate a saved snapshot. Answers can include
-visual pointers over the original app. Use **Continue in Chat** to explore a
-Help exchange as connected topics.
+## Try it
 
-Normal questions capture the current screen and send it to your configured
-model. Annotations use their saved snapshot. Metafor does not continuously
-watch your screen or control other apps. Help history and screenshots stay in
-local storage; screenshots are not included in `.ingx` exports.
+1. Download the Mac app and move it to **Applications**.
+2. Choose **Add API key**, save your key in Settings, then **Check connection**.
+3. Open Chat, or press **Option + M** for Help.
 
-## Run the Mac app
+Requires **Apple silicon and macOS 26+**. AI answers need internet access and
+your own model API key. This preview is not notarized.
 
-Requires macOS, Node.js 22+, npm, and Apple's command-line developer tools
-(`swiftc`). Model answers require internet access and your own API key.
+Chats save locally. Existing chats remain readable without an API key; a fresh
+installation on a new Mac starts empty.
 
-```sh
-npm ci
-npm run desktop:dev
-```
-
-On first open, a brief guide introduces Chat and Help. Choose **Open settings**
-to add your API key, or return through **Metafor → Settings…** (`⌘,`). Reopen the
-guide with **Metafor → Quick start…**. Meta is the default
-provider. The model chooser applies to both Chat and Help. Allow macOS Screen
-Recording when using Help.
-
-Build an Apple silicon installer with `npm run desktop:dmg`. Output is in
-`artifacts/mac/`. The current build is ad-hoc signed, not Developer ID signed or
-notarized. See the [Mac app guide](docs/mac-app.md) for installation, permissions,
-storage, and build details.
-
-## Run the browser app
-
-The browser app provides Metafor Chat.
-
-```sh
-npm ci
-cp -n .env.example .env.local
-```
-
-Set `MODEL_API_KEY` in `.env.local`, then run `npm run dev` and open
-[127.0.0.1:3000](http://127.0.0.1:3000). The API key stays on the server.
-
-## Verify
-
-```sh
-npm test
-npm run desktop:test
-npm run typecheck
-npm run build
-npm run desktop:build
-```
-
-[Conversation reader](docs/conversation-reader.md) ·
-[Model selection](docs/model-selection.md) ·
-[Architecture](docs/architecture.md) ·
-[Mac verification](docs/mac-verification.md)
+[Installation guide](docs/mac-app.md) · [Documentation and source setup](docs/README.md)
