@@ -1,8 +1,9 @@
 # MetaFor
 
 **[Website](https://metafor.pages.dev/)** ·
-[Download for Mac](https://metafor.pages.dev/download) ·
-[Watch demo](https://youtu.be/hBM_tifGJJk)
+[Watch demo](https://youtu.be/hBM_tifGJJk) ·
+[Download for Mac](https://metafor.pages.dev/download)
+
 
 ## Architecture
 
