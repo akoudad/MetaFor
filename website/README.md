@@ -1,15 +1,17 @@
 # MetaFor website
 
-A small, interactive showcase for the MetaFor Mac app.
+A minimal showcase for the MetaFor Mac app, with its black, starry identity.
 
-- **MetaFor Chat:** explore an answer, follow connected topics, and return without losing your place.
-- **MetaFor Help:** press **Option + M** to ask about your current screen and see guidance where it matters.
+- **MetaFor Chat:** explore connected topics and ask beside a passage.
+- **MetaFor Help:** ask about the current screen; Option + M is explained in its feature details.
+- A scroll-linked orb splits into Chat and Help paths, follows their expandable details, and reunites at the embedded demo video. Scrolling up reverses the paths. Reduced-motion mode shows static paths.
+- LinkedIn, GitHub, and email links sit in the header. A floating download button appears after the hero download button scrolls out of view.
 
-The page includes expandable feature branches, a scripted conversation preview, an illustrated Help preview, an actual app screenshot, and a navigation map. The demo film has a labelled placeholder. These previews do not call a model or capture a visitor's screen.
+The page contains an actual app screenshot and the YouTube demo (`hBM_tifGJJk`). It does not call a model or capture a visitor's screen.
 
-[Website](https://getmetafor.akoudad-karim-contac.chatgpt.site) · [Download for Mac](https://github.com/akoudad/MetaFor/releases/download/v0.4.8/Metafor-0.4.8-arm64.dmg)
+[Website](https://getmetafor.akoudad-karim-contac.chatgpt.site) · [Download for Mac](https://github.com/akoudad/MetaFor/releases/download/v0.4.9/Metafor-0.4.9-arm64.dmg)
 
-The app requires Apple silicon, macOS 26+, internet access, and a model API key. Help needs Screen Recording permission. The current build is not notarized. Its first-launch guide introduces Chat, Help, and the shortcut.
+The app requires Apple silicon, macOS 26+, internet access, and your own model API key. Help needs Screen Recording permission. The current build is not notarized.
 
 ## Preview
 
@@ -21,4 +23,4 @@ Run this from the repository root, then open `http://localhost:4173`. Publish `w
 
 ## Checks
 
-Verify feature expansion, topic navigation and return, Help preview tabs and dismissal, page-map links, direct download URLs, and narrow-screen layout. All controls support keyboard use. Reduced-motion preferences disable decorative movement.
+Verify feature details, responsive layouts, scroll progress in both directions, reduced motion, the floating download button, video embed, and download links. Header links, feature details, and downloads support keyboard use.
